@@ -75,14 +75,21 @@ router.post("/:roomId/save", authenticateToken, async (req, res) => {
 // Save snapshot
 router.post("/:roomId/snapshot", authenticateToken, async (req, res) => {
   try {
-    const { data, label } = req.body
+    const { data, label, message, author, filesCount, fileNames } = req.body
 
     const project = await Project.findOne({ roomId: req.params.roomId })
     if (!project) {
       return res.status(404).json({ message: "Project not found" })
     }
 
-    project.history.push({ data, label: label || "" })
+    project.history.push({
+      data,
+      label: label || "",
+      message: message || "",
+      author: author || "",
+      filesCount: filesCount || 0,
+      fileNames: fileNames || [],
+    })
     if (project.history.length > 20) {
       project.history = project.history.slice(-20)
     }

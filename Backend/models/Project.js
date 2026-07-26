@@ -9,6 +9,10 @@ const fileSchema = new mongoose.Schema({
 const snapshotSchema = new mongoose.Schema({
   data: { type: String, required: true },
   label: { type: String, default: "" },
+  message: { type: String, default: "" },
+  author: { type: String, default: "" },
+  filesCount: { type: Number, default: 0 },
+  fileNames: { type: [String], default: [] },
   timestamp: { type: Date, default: Date.now },
 })
 

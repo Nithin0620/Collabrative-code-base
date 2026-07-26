@@ -10,6 +10,8 @@ export default function EditorToolbar({
   onSave,
   onSnapshot,
   onShowHistory,
+  onToggleComments,
+  showComments,
   lastSaved,
   isSaving,
 }) {
@@ -91,6 +93,16 @@ export default function EditorToolbar({
           className="px-2.5 py-1 rounded bg-gray-800 border border-gray-700 text-gray-300 text-xs hover:bg-gray-700 hover:text-white transition-colors cursor-pointer"
         >
           History
+        </button>
+        <button
+          onClick={onToggleComments}
+          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
+            showComments
+              ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+              : "bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-white"
+          }`}
+        >
+          Comments
         </button>
       </div>
     </div>

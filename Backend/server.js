@@ -11,6 +11,7 @@ import connectDB from "./config/db.js"
 import { configurePassport } from "./config/passport.js"
 import authRoutes from "./routes/auth.js"
 import projectRoutes from "./routes/projects.js"
+import commentRoutes from "./routes/comments.js"
 import User from "./models/User.js"
 
 await connectDB()
@@ -58,6 +59,7 @@ ySocketIO.initialize()
 
 app.use("/auth", authRoutes)
 app.use("/api/projects", projectRoutes)
+app.use("/api/comments", commentRoutes)
 
 app.get("/health", (req, res) => {
   res.status(200).json({ message: "ok", success: true })

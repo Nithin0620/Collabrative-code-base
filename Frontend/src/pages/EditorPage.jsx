@@ -12,6 +12,9 @@ import FileExplorer from "../components/FileExplorer"
 import EditorToolbar from "../components/EditorToolbar"
 import StatusBar from "../components/StatusBar"
 import SnapshotHistory from "../components/SnapshotHistory"
+import SnapshotDialog from "../components/SnapshotDialog"
+import DiffView from "../components/DiffView"
+import CommentsPanel from "../components/CommentsPanel"
 
 const IDLE_TIMEOUT = 30000
 const TYPING_TIMEOUT = 2000
@@ -126,6 +129,16 @@ export default function EditorPage({ roomId }) {
   const [isSnapshotting, setIsSnapshotting] = useState(false)
   const [statusContent, setStatusContent] = useState("")
   const [showHistory, setShowHistory] = useState(false)
+  const [showSnapshotDialog, setShowSnapshotDialog] = useState(false)
+  const [diffSnapshot, setDiffSnapshot] = useState(null)
+  const [showComments, setShowComments] = useState(false)
+  const [selectionInfo, setSelectionInfo] = useState(null)
+  const [fileComments, setFileComments] = useState([])
+  const [focusedCommentId, setFocusedCommentId] = useState(null)
+  const [pendingPrefill, setPendingPrefill] = useState(null)
+  const [commentVersion, setCommentVersion] = useState(0)
+  const decorationIdsRef = useRef([])
+  const commentLineMapRef = useRef(new Map())
 
   const ydoc = useMemo(() => new Y.Doc(), [])
   const yFileTree = useMemo(() => ydoc.getMap("fileTree"), [ydoc])
@@ -191,17 +204,16 @@ export default function EditorPage({ roomId }) {
     saveProject().finally(() => setIsSaving(false))
   }, [saveProject])
 
-  const handleSnapshot = useCallback(async () => {
+  const handleSnapshot = useCallback(async (message) => {
     setIsSnapshotting(true)
     try {
       const ft = getFileTreeObj()
-      const files = Object.values(ft)
-        .filter((item) => item.type === "file")
-        .map((item) => ({
-          id: item.id,
-          content: getFileContent(item.id),
-          language: getFileInfo(item.name).language,
-        }))
+      const fileItems = Object.values(ft).filter((item) => item.type === "file")
+      const files = fileItems.map((item) => ({
+        id: item.id,
+        content: getFileContent(item.id),
+        language: getFileInfo(item.name).language,
+      }))
 
       const data = JSON.stringify({ fileTree: ft, files, settings: { theme, fontSize } })
 
@@ -215,14 +227,21 @@ export default function EditorPage({ roomId }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ data, label: "v" + version }),
+        body: JSON.stringify({
+          data,
+          label: "v" + version,
+          message: message || "",
+          author: user?.username || "",
+          filesCount: fileItems.length,
+          fileNames: fileItems.map((item) => item.name),
+        }),
       })
     } catch (err) {
       console.error("Snapshot failed:", err)
     } finally {
       setIsSnapshotting(false)
     }
-  }, [roomId, theme, fontSize, getFileTreeObj, getFileContent])
+  }, [roomId, theme, fontSize, getFileTreeObj, getFileContent, user])
 
   useEffect(() => {
     if (!selectedFileId) {
@@ -254,6 +273,180 @@ export default function EditorPage({ roomId }) {
       defineCustomThemes(monaco)
     }
   }, [monaco])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !selectedFileId) return
+
+    setSelectionInfo(null)
+
+    const handler = (e) => {
+      const selection = e.selection
+      const model = editor.getModel()
+      if (!model) return
+
+      const isEmpty = selection.startLineNumber === selection.endLineNumber && selection.startColumn === selection.endColumn
+      if (isEmpty) {
+        setSelectionInfo(null)
+        return
+      }
+
+      const selectedText = model.getValueInRange(selection)
+      if (!selectedText.trim()) {
+        setSelectionInfo(null)
+        return
+      }
+
+      const editorDom = editor.getDomNode()
+      if (!editorDom) return
+      const editorRect = editorDom.getBoundingClientRect()
+      const topLine = editor.getTopForLineNumber(selection.startLineNumber)
+      const bottomLine = editor.getBottomForLineNumber(selection.endLineNumber)
+      const scrollTop = editor.getScrollTop()
+      const top = editorRect.top + topLine - scrollTop + 8
+
+      const endCol = selection.endColumn
+      const fontSize = editor.getOption(monaco.editor.EditorOption.fontSize)
+      const charWidth = fontSize * 0.602
+      const gutterWidth = 60
+      const rawLeft = editorRect.left + gutterWidth + endCol * charWidth - editor.getScrollLeft()
+      const left = Math.min(rawLeft, window.innerWidth - 100)
+
+      setSelectionInfo({
+        startLine: selection.startLineNumber,
+        endLine: selection.endLineNumber,
+        selectedText,
+        top: Math.max(editorRect.top + 10, Math.min(top, editorRect.bottom - 30)),
+        left,
+      })
+    }
+
+    const disposable = editor.onDidChangeCursorSelection(handler)
+    return () => {
+      disposable.dispose()
+    }
+  }, [selectedFileId, monaco])
+
+  useEffect(() => {
+    if (!selectedFileId) {
+      setFileComments([])
+      return
+    }
+    const fetchComments = async () => {
+      try {
+        const res = await fetch("/api/comments/" + roomId, { credentials: "include" })
+        const data = await res.json()
+        setFileComments((data.comments || []).filter((c) => c.fileId === selectedFileId && !c.resolved))
+      } catch {
+        setFileComments([])
+      }
+    }
+    fetchComments()
+  }, [selectedFileId, roomId, commentVersion])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !monaco) return
+    const model = editor.getModel()
+    if (!model) return
+
+    decorationIdsRef.current = model.deltaDecorations(decorationIdsRef.current, [])
+    commentLineMapRef.current.clear()
+
+    fileComments.forEach((comment) => {
+      const startLine = comment.startLine || 1
+      const endLine = comment.endLine || startLine
+      for (let l = startLine; l <= endLine; l++) {
+        commentLineMapRef.current.set(l, comment)
+      }
+    })
+
+    if (fileComments.length === 0) return
+
+    const decorations = fileComments.map((comment) => {
+      const startLine = comment.startLine || 1
+      const endLine = comment.endLine || startLine
+      return {
+        range: new monaco.Range(startLine, 1, endLine, 1),
+        options: {
+          isWholeLine: true,
+          className: "comment-highlight-" + (comment.color || "default").replace("#", ""),
+          overviewRuler: {
+            color: comment.color || "#eab308",
+            position: monaco.editor.OverviewRulerLane.Right,
+          },
+          linesDecorations: [{
+            icon: "comment-icon",
+            color: comment.color || "#eab308",
+          }],
+          glyphMarginClassName: "comment-glyph-" + (comment.color || "default").replace("#", ""),
+          minimap: { color: comment.color || "#eab308", position: 1 },
+          commentId: comment._id,
+        },
+      }
+    })
+
+    decorationIdsRef.current = model.deltaDecorations([], decorations)
+  }, [fileComments, monaco, selectedFileId])
+
+  useEffect(() => {
+    if (fileComments.length === 0) {
+      const el = document.getElementById("comment-decorations")
+      if (el) el.remove()
+      return
+    }
+    let styleEl = document.getElementById("comment-decorations")
+    if (!styleEl) {
+      styleEl = document.createElement("style")
+      styleEl.id = "comment-decorations"
+      document.head.appendChild(styleEl)
+    }
+    const rules = fileComments.map((c) => {
+      const id = (c.color || "#eab308").replace("#", "")
+      return `
+        .comment-highlight-${id} { background-color: ${c.color || "#eab308"}11 !important; }
+        .comment-glyph-${id} {
+          background: ${c.color || "#eab308"};
+          width: 6px !important; height: 6px !important;
+          border-radius: 50%; margin-left: 3px; margin-top: 2px;
+        }
+      `
+    }).join("\n")
+    styleEl.textContent = rules
+    return () => { document.getElementById("comment-decorations")?.remove() }
+  }, [fileComments])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !monaco) return
+    const editorDom = editor.getDomNode()
+    if (!editorDom) return
+
+    const handler = (e) => {
+      const editorRect = editorDom.getBoundingClientRect()
+      const layout = editor.getLayoutInfo()
+      const glyphMarginRight = editorRect.left + layout.glyphMarginLeft + layout.glyphMarginWidth
+      const gutterRight = glyphMarginRight + layout.lineNumbersWidth
+      if (e.clientX > gutterRight) return
+
+      const scrollTop = editor.getScrollTop()
+      const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight)
+      const line = Math.floor((e.clientY - editorRect.top + scrollTop) / lineHeight) + 1
+      if (line < 1) return
+
+      const comment = commentLineMapRef.current.get(line)
+      if (comment) {
+        e.preventDefault()
+        e.stopPropagation()
+        setShowComments(true)
+        setFocusedCommentId(comment._id)
+        setTimeout(() => setFocusedCommentId(null), 5000)
+      }
+    }
+
+    editorDom.addEventListener("click", handler, true)
+    return () => editorDom.removeEventListener("click", handler, true)
+  }, [monaco, selectedFileId])
 
   useEffect(() => {
     if (!user || !providerRef.current || !editorRef.current) return
@@ -288,17 +481,6 @@ export default function EditorPage({ roomId }) {
       }
     }
   }, [selectedFileId, monaco, ydoc, user])
-
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault()
-        handleSave()
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [handleSave])
 
   useEffect(() => {
     if (!user) return
@@ -478,6 +660,8 @@ export default function EditorPage({ roomId }) {
     }
   }, [user, token, ydoc, yFileTree, roomId])
 
+  const addCommentRef = useRef(null)
+
   const handleMount = (editor) => {
     editorRef.current = editor
 
@@ -491,6 +675,30 @@ export default function EditorPage({ roomId }) {
       )
     }
   }
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !monaco) return
+
+    const disposable = editor.addAction({
+      id: "add-comment",
+      label: "Add Comment",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyM],
+      contextMenuGroupId: "navigation",
+      contextMenuOrder: 1.5,
+      run: (ed) => {
+        const selection = ed.getSelection()
+        const model = ed.getModel()
+        if (!model || !selection) return
+        const startLine = selection.startLineNumber
+        const endLine = selection.endLineNumber
+        const selectedText = model.getValueInRange(selection)
+        setPendingPrefill({ startLine, endLine, selectedText })
+        setShowComments(true)
+      },
+    })
+    return () => disposable.dispose()
+  }, [monaco, selectedFileId])
 
   const handleCreateFile = useCallback((name, parentId) => {
     const id = "file_" + generateId()
@@ -559,6 +767,7 @@ export default function EditorPage({ roomId }) {
       if (snapshot.files && Array.isArray(snapshot.files)) {
         snapshot.files.forEach((f) => {
           const text = ydoc.getText("file:" + f.id)
+          if (text.length > 0) text.delete(0, text.length)
           if (f.content) text.insert(0, f.content)
         })
       }
@@ -578,6 +787,51 @@ export default function EditorPage({ roomId }) {
       setSelectedFileId(null)
     }
   }, [ydoc, yFileTree, getFileTreeObj])
+
+  const handleDiff = useCallback((snapshot) => {
+    setDiffSnapshot(snapshot)
+    setShowHistory(false)
+  }, [])
+
+  const handleSnapshotClick = useCallback(() => {
+    setShowSnapshotDialog(true)
+  }, [])
+
+  const handleSnapshotDialogSave = useCallback((message) => {
+    setShowSnapshotDialog(false)
+    handleSnapshot(message)
+  }, [handleSnapshot])
+
+  const handleQuickSnapshot = useCallback(() => {
+    const now = new Date()
+    const time = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+    handleSnapshot("Quick snapshot at " + time)
+  }, [handleSnapshot])
+
+  const handleJumpToLine = useCallback((fileId, line) => {
+    setSelectedFileId(fileId)
+    setTimeout(() => {
+      if (editorRef.current) {
+        editorRef.current.revealLineInCenter(line)
+        editorRef.current.setPosition({ lineNumber: line, column: 1 })
+        editorRef.current.focus()
+      }
+    }, 100)
+  }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "S") {
+        e.preventDefault()
+        handleQuickSnapshot()
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault()
+        handleSave()
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [handleSave, handleQuickSnapshot])
 
   return (
     <main className="h-screen w-full bg-gray-950 flex gap-4 p-4">
@@ -688,26 +942,7 @@ export default function EditorPage({ roomId }) {
           </div>
         )}
 
-        <div className="p-3 border-t border-gray-700">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="relative">
-              <UserAvatar user={user} />
-              <span className="absolute -bottom-0.5 -right-0.5 block w-3 h-3 rounded-full border-2 border-gray-900">
-                <StatusDot status={usersMap.get(user.username)?.status || "active"} />
-              </span>
-            </div>
-            <div className="flex flex-col min-w-0">
-              <span
-                className="text-sm font-semibold truncate"
-                style={{ color: user.color }}
-              >
-                {user.username}
-              </span>
-              <span className="text-[10px] text-gray-400">
-                {user.isGuest ? "Guest" : "Signed in"}
-              </span>
-            </div>
-          </div>
+        <div className="p-3 border-t border-gray-700 mt-auto">
           <button
             onClick={logout}
             className="w-full p-2 rounded-lg bg-gray-800 text-gray-300 text-sm font-medium hover:bg-gray-700 hover:text-white transition-colors cursor-pointer"
@@ -725,28 +960,52 @@ export default function EditorPage({ roomId }) {
           fontSize={fontSize}
           onFontSizeChange={setFontSize}
           onSave={handleSave}
-          onSnapshot={handleSnapshot}
+          onSnapshot={handleSnapshotClick}
           onShowHistory={() => setShowHistory(true)}
+          onToggleComments={() => setShowComments(!showComments)}
+          showComments={showComments}
           lastSaved={lastSavedTime ? new Date(lastSavedTime).toLocaleTimeString() : null}
           isSaving={isSaving}
         />
 
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden relative">
           {selectedFileId ? (
-            <Editor
-              height="100%"
-              language={selectedFileLanguage}
-              theme={theme}
-              onMount={handleMount}
-              options={{
-                fontSize,
-                minimap: { enabled: true },
-                scrollBeyondLastLine: false,
-                wordWrap: "on",
-                automaticLayout: true,
-                tabSize: 2,
-              }}
-            />
+            <>
+              <Editor
+                height="100%"
+                language={selectedFileLanguage}
+                theme={theme}
+                onMount={handleMount}
+                options={{
+                  fontSize,
+                  minimap: { enabled: true },
+                  scrollBeyondLastLine: false,
+                  wordWrap: "on",
+                  automaticLayout: true,
+                  tabSize: 2,
+                  glyphMargin: true,
+                }}
+              />
+              {selectionInfo && (
+                <button
+                  onClick={() => {
+                    setPendingPrefill({
+                      startLine: selectionInfo.startLine,
+                      endLine: selectionInfo.endLine,
+                      selectedText: selectionInfo.selectedText,
+                    })
+                    setShowComments(true)
+                  }}
+                  className="fixed z-50 flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500 text-gray-950 text-xs font-semibold shadow-lg hover:bg-amber-400 transition-colors cursor-pointer"
+                  style={{ top: selectionInfo.top, left: selectionInfo.left }}
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                  </svg>
+                  Comment
+                </button>
+              )}
+            </>
           ) : (
             <div className="h-full flex items-center justify-center text-gray-500">
               <div className="text-center">
@@ -767,11 +1026,69 @@ export default function EditorPage({ roomId }) {
         />
       </section>
 
+      {showComments && (
+        <CommentsPanel
+          roomId={roomId}
+          user={user}
+          selectedFileId={selectedFileId}
+          selectedFileName={selectedFileName}
+          onJumpToLine={handleJumpToLine}
+          onClose={() => setShowComments(false)}
+          addCommentRef={addCommentRef}
+          focusedCommentId={focusedCommentId}
+          pendingPrefill={pendingPrefill}
+          onPrefillConsumed={() => setPendingPrefill(null)}
+          onCommentChanged={() => setCommentVersion((v) => v + 1)}
+        />
+      )}
+
       {showHistory && (
         <SnapshotHistory
           roomId={roomId}
           onClose={() => setShowHistory(false)}
           onRestore={handleRestore}
+          onDiff={handleDiff}
+        />
+      )}
+
+      {showSnapshotDialog && (
+        <SnapshotDialog
+          roomId={roomId}
+          currentFiles={Object.values(getFileTreeObj())
+            .filter((item) => item.type === "file")
+            .map((item) => ({
+              id: item.id,
+              name: item.name,
+              content: getFileContent(item.id),
+            }))}
+          onSave={handleSnapshotDialogSave}
+          onClose={() => setShowSnapshotDialog(false)}
+        />
+      )}
+
+      {diffSnapshot && (
+        <DiffView
+          label={diffSnapshot.message || diffSnapshot.label}
+          currentFiles={Object.values(getFileTreeObj())
+            .filter((item) => item.type === "file")
+            .map((item) => ({
+              id: item.id,
+              name: item.name,
+              content: getFileContent(item.id),
+              language: getFileInfo(item.name).language,
+            }))}
+          snapshotFiles={(() => {
+            try {
+              const parsed = JSON.parse(diffSnapshot.data)
+              return (parsed.files || []).map((f) => ({
+                ...f,
+                name: parsed.fileTree?.[f.id]?.name || f.id,
+              }))
+            } catch {
+              return []
+            }
+          })()}
+          onClose={() => setDiffSnapshot(null)}
         />
       )}
     </main>
