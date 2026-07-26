@@ -12,6 +12,8 @@ export default function EditorToolbar({
   onShowHistory,
   onToggleComments,
   showComments,
+  onToggleChat,
+  showChat,
   lastSaved,
   isSaving,
 }) {
@@ -103,6 +105,16 @@ export default function EditorToolbar({
           }`}
         >
           Comments
+        </button>
+        <button
+          onClick={onToggleChat}
+          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
+            showChat
+              ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+              : "bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-white"
+          }`}
+        >
+          Chat
         </button>
       </div>
     </div>

@@ -81,7 +81,7 @@ function TreeItem({ item, depth, selectedFileId, activeFolderId, draggedId, drag
                   ? "opacity-40 text-gray-300"
                   : "text-gray-300 hover:bg-gray-800/50"
         }`}
-        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        style={{ paddingLeft: `${Math.min(depth * 10 + 6, 40)}px` }}
         draggable={!isRenaming}
         onDragStart={(e) => onDragStart(e, item.id)}
         onDragEnd={onDragEnd}
@@ -350,17 +350,17 @@ export default function FileExplorer({ fileTree, selectedFileId, onSelect, onCre
         />
       )}
 
-      <div className="px-3 py-2 border-b border-gray-800">
+      <div className="px-2 py-2 border-b border-gray-800">
         <div className="flex gap-1">
           <button
             onClick={(e) => { e.stopPropagation(); setShowNew("file"); setContextMenu(null) }}
-            className="flex-1 px-2 py-1 rounded text-[11px] text-gray-400 bg-gray-800 hover:bg-gray-700 hover:text-gray-300 transition-colors cursor-pointer"
+            className="flex-1 min-w-0 px-2 py-1 rounded text-[11px] text-gray-400 bg-gray-800 hover:bg-gray-700 hover:text-gray-300 transition-colors cursor-pointer truncate"
           >
             + File
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); setShowNew("folder"); setContextMenu(null) }}
-            className="flex-1 px-2 py-1 rounded text-[11px] text-gray-400 bg-gray-800 hover:bg-gray-700 hover:text-gray-300 transition-colors cursor-pointer"
+            className="flex-1 min-w-0 px-2 py-1 rounded text-[11px] text-gray-400 bg-gray-800 hover:bg-gray-700 hover:text-gray-300 transition-colors cursor-pointer truncate"
           >
             + Folder
           </button>

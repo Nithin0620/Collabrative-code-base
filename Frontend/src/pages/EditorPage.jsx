@@ -4,6 +4,7 @@ import { useRef, useMemo, useState, useEffect, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
 import * as Y from "yjs"
 import { SocketIOProvider } from "y-socket.io"
+import { io } from "socket.io-client"
 import { useAuth } from "../hooks/useAuth"
 import { saveRoom } from "../lib/rooms"
 import { getFileInfo, generateId } from "../lib/fileTree"
@@ -15,6 +16,7 @@ import SnapshotHistory from "../components/SnapshotHistory"
 import SnapshotDialog from "../components/SnapshotDialog"
 import DiffView from "../components/DiffView"
 import CommentsPanel from "../components/CommentsPanel"
+import ChatPanel from "../components/ChatPanel"
 
 const IDLE_TIMEOUT = 30000
 const TYPING_TIMEOUT = 2000
@@ -119,6 +121,11 @@ export default function EditorPage({ roomId }) {
   const [usersMap, setUsersMap] = useState(new Map())
   const [typingUsers, setTypingUsers] = useState([])
   const [copied, setCopied] = useState(false)
+  const [followedUser, setFollowedUser] = useState(null)
+  const [showChat, setShowChat] = useState(false)
+  const [chatSocket, setChatSocket] = useState(null)
+  const [sidebarWidth, setSidebarWidth] = useState(224)
+  const isResizingRef = useRef(false)
 
   const [fileTree, setFileTree] = useState({})
   const [selectedFileId, setSelectedFileId] = useState(null)
@@ -328,6 +335,59 @@ export default function EditorPage({ roomId }) {
   }, [selectedFileId, monaco])
 
   useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !selectedFileId || !providerRef.current) return
+    const awareness = providerRef.current.awareness
+
+    const disposable = editor.onDidChangeCursorPosition((e) => {
+      const state = awareness.getLocalState()
+      if (!state?.user) return
+      awareness.setLocalStateField("user", {
+        ...state.user,
+        cursorPos: {
+          line: e.position.lineNumber,
+          column: e.position.column,
+          fileId: selectedFileId,
+        },
+      })
+    })
+    return () => disposable.dispose()
+  }, [selectedFileId, monaco])
+
+  useEffect(() => {
+    if (!followedUser || !providerRef.current) return
+    const awareness = providerRef.current.awareness
+    const editor = editorRef.current
+    if (!editor) return
+
+    const onAwareness = () => {
+      const states = Array.from(awareness.getStates().entries())
+      for (const [clientID, state] of states) {
+        if (state.user?.username !== followedUser) continue
+        const pos = state.user.cursorPos
+        if (!pos) continue
+        if (pos.fileId && pos.fileId !== selectedFileId) {
+          setSelectedFileId(pos.fileId)
+          setTimeout(() => {
+            const e = editorRef.current
+            if (e && pos.line) {
+              e.revealLineInCenter(pos.line)
+              e.setPosition({ lineNumber: pos.line, column: pos.column || 1 })
+            }
+          }, 200)
+        } else if (pos.line) {
+          editor.revealLineInCenter(pos.line)
+          editor.setPosition({ lineNumber: pos.line, column: pos.column || 1 })
+        }
+        break
+      }
+    }
+
+    awareness.on("change", onAwareness)
+    return () => awareness.off("change", onAwareness)
+  }, [followedUser, selectedFileId])
+
+  useEffect(() => {
     if (!selectedFileId) {
       setFileComments([])
       return
@@ -439,6 +499,7 @@ export default function EditorPage({ roomId }) {
         e.preventDefault()
         e.stopPropagation()
         setShowComments(true)
+        setShowChat(false)
         setFocusedCommentId(comment._id)
         setTimeout(() => setFocusedCommentId(null), 5000)
       }
@@ -492,6 +553,15 @@ export default function EditorPage({ roomId }) {
       auth: { token: token || "" },
     })
     providerRef.current = provider
+
+    const chatSocket = io("/", {
+      auth: { token: token || "" },
+      transports: ["websocket"],
+    })
+    chatSocket.on("connect", () => {
+      chatSocket.emit("join-room", roomId)
+    })
+    setChatSocket(chatSocket)
 
     const awareness = provider.awareness
 
@@ -653,6 +723,9 @@ export default function EditorPage({ roomId }) {
       }
       provider.disconnect()
       providerRef.current = null
+      if (chatSocket) {
+        chatSocket.disconnect()
+      }
       window.removeEventListener("beforeunload", handleBeforeUnload)
 
       const styleEl = document.getElementById("y-monaco-cursors")
@@ -695,6 +768,7 @@ export default function EditorPage({ roomId }) {
         const selectedText = model.getValueInRange(selection)
         setPendingPrefill({ startLine, endLine, selectedText })
         setShowComments(true)
+        setShowChat(false)
       },
     })
     return () => disposable.dispose()
@@ -808,6 +882,35 @@ export default function EditorPage({ roomId }) {
     handleSnapshot("Quick snapshot at " + time)
   }, [handleSnapshot])
 
+  const sidebarCollapsed = sidebarWidth < 80
+
+  const handleResizeStart = useCallback((e) => {
+    e.preventDefault()
+    isResizingRef.current = true
+    const startX = e.clientX
+    const startWidth = sidebarWidth
+
+    const onMouseMove = (e) => {
+      if (!isResizingRef.current) return
+      const delta = e.clientX - startX
+      const newWidth = Math.max(44, Math.min(320, startWidth + delta))
+      setSidebarWidth(newWidth)
+    }
+
+    const onMouseUp = () => {
+      isResizingRef.current = false
+      document.removeEventListener("mousemove", onMouseMove)
+      document.removeEventListener("mouseup", onMouseUp)
+      document.body.style.cursor = ""
+      document.body.style.userSelect = ""
+    }
+
+    document.body.style.cursor = "col-resize"
+    document.body.style.userSelect = "none"
+    document.addEventListener("mousemove", onMouseMove)
+    document.addEventListener("mouseup", onMouseUp)
+  }, [sidebarWidth])
+
   const handleJumpToLine = useCallback((fileId, line) => {
     setSelectedFileId(fileId)
     setTimeout(() => {
@@ -835,120 +938,249 @@ export default function EditorPage({ roomId }) {
 
   return (
     <main className="h-screen w-full bg-gray-950 flex gap-4 p-4">
-      <aside className="h-full w-64 bg-gray-900 rounded-lg flex flex-col border border-gray-700">
-        <div className="p-3 border-b border-gray-700">
-          <button
-            onClick={() => navigate("/")}
-            className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors cursor-pointer"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-            Dashboard
-          </button>
-        </div>
-        <div className="p-4 border-b border-gray-700">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-lg font-bold text-white">Users</h2>
-            <span className="text-xs text-gray-300">
-              {users.length} {users.length === 1 ? "user" : "users"}
-            </span>
-          </div>
-          <div className="flex gap-2">
+      <aside
+        className="h-full bg-gray-900 rounded-lg flex flex-col border border-gray-700 shrink-0 relative overflow-hidden"
+        style={{ width: sidebarWidth, minWidth: 44, maxWidth: 320 }}
+      >
+        {/* Dashboard */}
+        {sidebarCollapsed ? (
+          <div className="flex justify-center py-2">
             <button
-              onClick={copyInviteLink}
-              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg bg-amber-500 text-gray-950 text-xs font-semibold hover:bg-amber-400 transition-colors cursor-pointer"
+              onClick={() => navigate("/")}
+              className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition-colors cursor-pointer"
+              title="Dashboard"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+              </svg>
+            </button>
+          </div>
+        ) : (
+          <div className="px-3 py-2 border-b border-gray-700">
+            <button
+              onClick={() => navigate("/")}
+              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors cursor-pointer"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
               </svg>
-              {copied ? "Copied!" : "Copy Link"}
+              Dashboard
             </button>
+          </div>
+        )}
+
+        {/* File Explorer */}
+        {sidebarCollapsed ? (
+          <div className="flex justify-center py-2 border-b border-gray-700">
             <button
               onClick={() => {
-                if (navigator.share) {
-                  navigator.share({ title: "Join my room", url: inviteLink })
-                } else {
-                  copyInviteLink()
+                if (Object.keys(fileTree).length > 0) {
+                  const firstFile = Object.values(fileTree).find((item) => item.type === "file")
+                  if (firstFile) setSelectedFileId(firstFile.id)
                 }
               }}
-              className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg bg-gray-800 text-gray-300 text-xs font-semibold hover:bg-gray-700 hover:text-white border border-gray-600 transition-colors cursor-pointer"
+              className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition-colors cursor-pointer"
+              title="File Explorer"
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
               </svg>
-              Share
             </button>
           </div>
-        </div>
+        ) : (
+          <FileExplorer
+            fileTree={fileTree}
+            selectedFileId={selectedFileId}
+            onSelect={(item) => setSelectedFileId(item.id)}
+            onCreateFile={handleCreateFile}
+            onCreateFolder={handleCreateFolder}
+            onRename={handleRename}
+            onDelete={handleDelete}
+            onMove={handleMove}
+          />
+        )}
 
-        <FileExplorer
-          fileTree={fileTree}
-          selectedFileId={selectedFileId}
-          onSelect={(item) => setSelectedFileId(item.id)}
-          onCreateFile={handleCreateFile}
-          onCreateFolder={handleCreateFolder}
-          onRename={handleRename}
-          onDelete={handleDelete}
-          onMove={handleMove}
-        />
-
-        <ul className="p-3 border-t border-gray-700 max-h-40 overflow-y-auto">
-          {users.map((u, index) => (
-            <li
-              key={index}
-              className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            >
-              <div className="relative">
+        {/* Users */}
+        {sidebarCollapsed ? (
+          <div className="px-2 py-2 border-t border-gray-700 flex flex-col items-center gap-1.5">
+            {users.slice(0, 3).map((u, index) => (
+              <div key={index} className="relative shrink-0" title={u.username + (u.username === user.username ? " (you)" : "")}>
                 <UserAvatar user={u} />
-                <span className="absolute -bottom-0.5 -right-0.5 block w-3 h-3 rounded-full border-2 border-gray-900">
+                <span className="absolute bottom-0 right-0 block w-2 h-2 rounded-full border-2 border-gray-900">
                   <StatusDot status={u.status || "active"} />
                 </span>
               </div>
-              <div className="flex flex-col min-w-0">
-                <span
-                  className="text-sm font-semibold truncate"
-                  style={{ color: u.color }}
-                >
-                  {u.username}
-                </span>
-                <span className="text-[10px] text-gray-400">
-                  {u.isGuest ? "Guest" : "Signed in"}
-                  {u.status === "idle" && " · Idle"}
-                  {u.typing && u.username !== user.username && " · Typing..."}
-                </span>
-              </div>
-              {u.username === user.username && (
-                <span className="ml-auto text-[10px] text-gray-400 shrink-0">(you)</span>
-              )}
-            </li>
-          ))}
-        </ul>
+            ))}
+            {users.length > 3 && (
+              <span className="text-[9px] text-gray-500">+{users.length - 3}</span>
+            )}
+          </div>
+        ) : (
+          <div className="px-2 py-1.5 border-t border-gray-700">
+            <div className="flex items-center justify-between px-1 mb-1">
+              <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Users ({users.length})</span>
+            </div>
+            <ul className="max-h-28 overflow-y-auto space-y-0.5">
+              {users.map((u, index) => {
+                const isMe = u.username === user.username
+                const isFollowed = followedUser === u.username
+                return (
+                  <li
+                    key={index}
+                    className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-gray-800 transition-colors"
+                  >
+                  <div className="relative shrink-0">
+                    <UserAvatar user={u} />
+                    <span className="absolute bottom-0 right-0 block w-2.5 h-2.5 rounded-full border-2 border-gray-900">
+                      <StatusDot status={u.status || "active"} />
+                    </span>
+                  </div>
+                    <span className="text-xs font-medium truncate min-w-0" style={{ color: u.color }}>
+                      {u.username}{isMe ? " (you)" : ""}
+                    </span>
+                    <span className="text-[9px] text-gray-500 shrink-0">
+                      {u.status === "idle" && "Idle"}
+                      {u.typing && !isMe && "..."}
+                    </span>
+                    {!isMe && (
+                      <button
+                        onClick={() => setFollowedUser(isFollowed ? null : u.username)}
+                        className={`ml-auto shrink-0 px-1.5 py-0.5 rounded text-[9px] font-semibold transition-colors cursor-pointer ${
+                          isFollowed
+                            ? "bg-amber-500 text-gray-950"
+                            : "text-gray-500 hover:text-gray-300"
+                        }`}
+                      >
+                        {isFollowed ? "Unfollow" : "Follow"}
+                      </button>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        )}
 
-        {typingUsers.length > 0 && (
-          <div className="px-3 pb-2">
-            <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-gray-800 border border-gray-700">
+        {/* Typing indicator */}
+        {!sidebarCollapsed && typingUsers.length > 0 && (
+          <div className="px-3 py-1">
+            <div className="flex items-center gap-1.5">
               <span className="flex gap-0.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "150ms" }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+                <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+                <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "150ms" }} />
+                <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "300ms" }} />
               </span>
-              <span className="text-xs text-gray-300">
-                {typingUsers.length === 1
-                  ? `${typingUsers[0]} is typing`
-                  : `${typingUsers.length} users typing`}
+              <span className="text-[10px] text-gray-400">
+                {typingUsers.length === 1 ? `${typingUsers[0]} typing` : `${typingUsers.length} typing`}
               </span>
             </div>
           </div>
         )}
 
-        <div className="p-3 border-t border-gray-700 mt-auto">
-          <button
-            onClick={logout}
-            className="w-full p-2 rounded-lg bg-gray-800 text-gray-300 text-sm font-medium hover:bg-gray-700 hover:text-white transition-colors cursor-pointer"
-          >
-            Sign out
-          </button>
+        {sidebarCollapsed && typingUsers.length > 0 && (
+          <div className="flex justify-center py-1">
+            <div className="flex gap-0.5" title={typingUsers.join(", ") + " typing"}>
+              <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+              <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "150ms" }} />
+              <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+            </div>
+          </div>
+        )}
+
+        {/* Following indicator */}
+        {!sidebarCollapsed && followedUser && (
+          <div className="px-3 py-1">
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+              <span className="text-[10px] text-amber-300 flex-1 truncate">Following {followedUser}</span>
+              <button
+                onClick={() => setFollowedUser(null)}
+                className="text-[9px] text-amber-400 hover:text-amber-300 font-semibold cursor-pointer"
+              >
+                Stop
+              </button>
+            </div>
+          </div>
+        )}
+
+        {sidebarCollapsed && followedUser && (
+          <div className="flex justify-center py-1">
+            <button
+              onClick={() => setFollowedUser(null)}
+              className="p-1 rounded bg-amber-500/20 cursor-pointer"
+              title={"Following " + followedUser + " - click to stop"}
+            >
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse block" />
+            </button>
+          </div>
+        )}
+
+        {/* Bottom actions */}
+        <div className={`mt-auto border-t border-gray-700 ${sidebarCollapsed ? "px-1.5 py-2 flex flex-col items-center gap-1.5" : "px-2 py-2 space-y-1.5"}`}>
+          {!sidebarCollapsed && (
+            <>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={copyInviteLink}
+                  className="flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium bg-amber-500 text-gray-950 hover:bg-amber-400 transition-colors cursor-pointer"
+                >
+                  {copied ? "Copied!" : "Copy Link"}
+                </button>
+                <button
+                  onClick={() => {
+                    if (navigator.share) {
+                      navigator.share({ title: "Join my room", url: inviteLink })
+                    } else {
+                      copyInviteLink()
+                    }
+                  }}
+                  className="flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-600 transition-colors cursor-pointer"
+                >
+                  Share
+                </button>
+              </div>
+              <button
+                onClick={logout}
+                className="w-full px-1.5 py-1 rounded text-[10px] text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors cursor-pointer"
+              >
+                Sign out
+              </button>
+            </>
+          )}
+          {sidebarCollapsed && (
+            <>
+              <button
+                onClick={copyInviteLink}
+                className={`p-1.5 rounded transition-colors cursor-pointer ${
+                  copied
+                    ? "bg-green-500 text-gray-950"
+                    : "text-gray-400 hover:bg-gray-800 hover:text-white"
+                }`}
+                title={copied ? "Copied!" : "Copy invite link"}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                </svg>
+              </button>
+              <button
+                onClick={logout}
+                className="p-1.5 rounded text-red-400 hover:bg-red-500/10 hover:text-red-300 transition-colors cursor-pointer"
+                title="Sign out"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Resize handle */}
+        <div
+          onMouseDown={handleResizeStart}
+          className="absolute top-0 right-0 h-full w-1 cursor-col-resize group z-10"
+        >
+          <div className="w-px h-full bg-transparent group-hover:bg-gray-500 transition-colors" />
         </div>
       </aside>
 
@@ -962,8 +1194,10 @@ export default function EditorPage({ roomId }) {
           onSave={handleSave}
           onSnapshot={handleSnapshotClick}
           onShowHistory={() => setShowHistory(true)}
-          onToggleComments={() => setShowComments(!showComments)}
+          onToggleComments={() => { setShowComments(!showComments); if (!showComments) setShowChat(false) }}
           showComments={showComments}
+          onToggleChat={() => { setShowChat(!showChat); if (!showChat) setShowComments(false) }}
+          showChat={showChat}
           lastSaved={lastSavedTime ? new Date(lastSavedTime).toLocaleTimeString() : null}
           isSaving={isSaving}
         />
@@ -995,6 +1229,7 @@ export default function EditorPage({ roomId }) {
                       selectedText: selectionInfo.selectedText,
                     })
                     setShowComments(true)
+                    setShowChat(false)
                   }}
                   className="fixed z-50 flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500 text-gray-950 text-xs font-semibold shadow-lg hover:bg-amber-400 transition-colors cursor-pointer"
                   style={{ top: selectionInfo.top, left: selectionInfo.left }}
@@ -1040,6 +1275,25 @@ export default function EditorPage({ roomId }) {
           onPrefillConsumed={() => setPendingPrefill(null)}
           onCommentChanged={() => setCommentVersion((v) => v + 1)}
         />
+      )}
+
+      {showChat && (
+        <div className="h-full w-80 bg-gray-900 rounded-lg border border-gray-700 flex flex-col shrink-0">
+          <div className="flex items-center justify-between p-3 border-b border-gray-700">
+            <h3 className="text-sm font-bold text-white">Chat</h3>
+            <button
+              onClick={() => setShowChat(false)}
+              className="text-gray-400 hover:text-white transition-colors cursor-pointer"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <ChatPanel roomId={roomId} user={user} socket={chatSocket} />
+          </div>
+        </div>
       )}
 
       {showHistory && (
