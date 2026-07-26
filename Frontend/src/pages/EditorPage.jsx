@@ -17,6 +17,12 @@ import SnapshotDialog from "../components/SnapshotDialog"
 import DiffView from "../components/DiffView"
 import CommentsPanel from "../components/CommentsPanel"
 import ChatPanel from "../components/ChatPanel"
+import ExecutionPanel from "../components/ExecutionPanel"
+import SnippetManager from "../components/SnippetManager"
+import VideoWindow from "../components/VideoWindow"
+import VideoGallery from "../components/VideoGallery"
+import useWebRTC from "../hooks/useWebRTC"
+import { downloadFile, downloadProjectAsZip } from "../lib/download"
 
 const IDLE_TIMEOUT = 30000
 const TYPING_TIMEOUT = 2000
@@ -126,6 +132,25 @@ export default function EditorPage({ roomId }) {
   const [chatSocket, setChatSocket] = useState(null)
   const [sidebarWidth, setSidebarWidth] = useState(224)
   const isResizingRef = useRef(false)
+  const [pinnedUser, setPinnedUser] = useState(null)
+  const [showGallery, setShowGallery] = useState(false)
+  const [cameraToastDismissed, setCameraToastDismissed] = useState(false)
+
+  const {
+    localStream,
+    remoteStreams,
+    audioEnabled,
+    videoEnabled,
+    handRaised,
+    setHandRaised,
+    toggleAudio,
+    toggleVideo,
+    toggleHand,
+    callPeer,
+    cleanupPeer,
+    cleanup: cleanupWebRTC,
+    getLocalStream,
+  } = useWebRTC(chatSocket, roomId, user)
 
   const [fileTree, setFileTree] = useState({})
   const [selectedFileId, setSelectedFileId] = useState(null)
@@ -139,6 +164,8 @@ export default function EditorPage({ roomId }) {
   const [showSnapshotDialog, setShowSnapshotDialog] = useState(false)
   const [diffSnapshot, setDiffSnapshot] = useState(null)
   const [showComments, setShowComments] = useState(false)
+  const [showRunner, setShowRunner] = useState(false)
+  const [showSnippets, setShowSnippets] = useState(false)
   const [selectionInfo, setSelectionInfo] = useState(null)
   const [fileComments, setFileComments] = useState([])
   const [focusedCommentId, setFocusedCommentId] = useState(null)
@@ -388,6 +415,19 @@ export default function EditorPage({ roomId }) {
   }, [followedUser, selectedFileId])
 
   useEffect(() => {
+    if (!providerRef.current) return
+    const awareness = providerRef.current.awareness
+    const state = awareness.getLocalState()
+    if (!state?.user) return
+    awareness.setLocalStateField("user", {
+      ...state.user,
+      audioEnabled,
+      videoEnabled,
+      handRaised,
+    })
+  }, [audioEnabled, videoEnabled, handRaised])
+
+  useEffect(() => {
     if (!selectedFileId) {
       setFileComments([])
       return
@@ -573,6 +613,9 @@ export default function EditorPage({ roomId }) {
       isGuest: user.isGuest,
       status: "active",
       typing: false,
+      audioEnabled: false,
+      videoEnabled: false,
+      handRaised: false,
       lastActive: Date.now(),
     })
 
@@ -884,6 +927,28 @@ export default function EditorPage({ roomId }) {
 
   const sidebarCollapsed = sidebarWidth < 80
 
+  const handleDownloadFile = useCallback(() => {
+    if (!selectedFile || !selectedFileId) return
+    const content = getFileContent(selectedFileId)
+    downloadFile(selectedFile.name, content)
+  }, [selectedFile, selectedFileId, getFileContent])
+
+  const handleDownloadProject = useCallback(() => {
+    downloadProjectAsZip(getFileTreeObj(), getFileContent)
+  }, [getFileTreeObj, getFileContent])
+
+  const handleInsertSnippet = useCallback((code) => {
+    const editor = editorRef.current
+    if (!editor) return
+    const selection = editor.getSelection()
+    const model = editor.getModel()
+    if (!model || !selection) return
+    editor.executeEdits("snippet-insert", [{
+      range: selection,
+      text: code,
+    }])
+  }, [])
+
   const handleResizeStart = useCallback((e) => {
     e.preventDefault()
     isResizingRef.current = true
@@ -911,6 +976,10 @@ export default function EditorPage({ roomId }) {
     document.addEventListener("mouseup", onMouseUp)
   }, [sidebarWidth])
 
+  useEffect(() => {
+    setCameraToastDismissed(false)
+  }, [Object.keys(remoteStreams).length])
+
   const handleJumpToLine = useCallback((fileId, line) => {
     setSelectedFileId(fileId)
     setTimeout(() => {
@@ -930,6 +999,9 @@ export default function EditorPage({ roomId }) {
       } else if ((e.ctrlKey || e.metaKey) && e.key === "s") {
         e.preventDefault()
         handleSave()
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault()
+        setShowRunner(true)
       }
     }
     window.addEventListener("keydown", handleKeyDown)
@@ -1038,6 +1110,22 @@ export default function EditorPage({ roomId }) {
                     <span className="text-xs font-medium truncate min-w-0" style={{ color: u.color }}>
                       {u.username}{isMe ? " (you)" : ""}
                     </span>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      {u.handRaised && (
+                        <span className="text-[11px]" title="Hand raised">&#9995;</span>
+                      )}
+                      {u.audioEnabled && (
+                        <svg className="w-3 h-3 text-green-400" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+                          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+                        </svg>
+                      )}
+                      {u.videoEnabled && (
+                        <svg className="w-3 h-3 text-blue-400" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
+                        </svg>
+                      )}
+                    </div>
                     <span className="text-[9px] text-gray-500 shrink-0">
                       {u.status === "idle" && "Idle"}
                       {u.typing && !isMe && "..."}
@@ -1119,7 +1207,60 @@ export default function EditorPage({ roomId }) {
         <div className={`mt-auto border-t border-gray-700 ${sidebarCollapsed ? "px-1.5 py-2 flex flex-col items-center gap-1.5" : "px-2 py-2 space-y-1.5"}`}>
           {!sidebarCollapsed && (
             <>
-              <div className="flex gap-1.5">
+              <div className="flex gap-1">
+                <button
+                  onClick={toggleAudio}
+                  className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium transition-colors cursor-pointer ${
+                    audioEnabled
+                      ? "bg-green-500/20 text-green-400 border border-green-500/30"
+                      : "bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-600"
+                  }`}
+                  title={audioEnabled ? "Mute mic" : "Enable mic"}
+                >
+                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+                    <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+                  </svg>
+                  {audioEnabled ? "Mute" : "Mic"}
+                </button>
+                <button
+                  onClick={toggleVideo}
+                  className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium transition-colors cursor-pointer ${
+                    videoEnabled
+                      ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                      : "bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-600"
+                  }`}
+                  title={videoEnabled ? "Stop video" : "Start video"}
+                >
+                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
+                  </svg>
+                  {videoEnabled ? "Stop" : "Video"}
+                </button>
+                <button
+                  onClick={toggleHand}
+                  className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium transition-colors cursor-pointer ${
+                    handRaised
+                      ? "bg-amber-500 text-gray-950"
+                      : "bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-600"
+                  }`}
+                  title={handRaised ? "Lower hand" : "Raise hand"}
+                >
+                  &#9995;
+                  {handRaised ? "Lower" : "Hand"}
+                </button>
+              </div>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setShowGallery(true)}
+                  className="flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-600 transition-colors cursor-pointer"
+                  title="Video Gallery"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                  </svg>
+                  Gallery
+                </button>
                 <button
                   onClick={copyInviteLink}
                   className="flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium bg-amber-500 text-gray-950 hover:bg-amber-400 transition-colors cursor-pointer"
@@ -1149,6 +1290,53 @@ export default function EditorPage({ roomId }) {
           )}
           {sidebarCollapsed && (
             <>
+              <button
+                onClick={toggleAudio}
+                className={`p-1.5 rounded transition-colors cursor-pointer ${
+                  audioEnabled
+                    ? "bg-green-500/20 text-green-400"
+                    : "text-gray-400 hover:bg-gray-800 hover:text-white"
+                }`}
+                title={audioEnabled ? "Mute mic" : "Enable mic"}
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+                  <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+                </svg>
+              </button>
+              <button
+                onClick={toggleVideo}
+                className={`p-1.5 rounded transition-colors cursor-pointer ${
+                  videoEnabled
+                    ? "bg-blue-500/20 text-blue-400"
+                    : "text-gray-400 hover:bg-gray-800 hover:text-white"
+                }`}
+                title={videoEnabled ? "Stop video" : "Start video"}
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
+                </svg>
+              </button>
+              <button
+                onClick={toggleHand}
+                className={`p-1.5 rounded transition-colors cursor-pointer ${
+                  handRaised
+                    ? "bg-amber-500 text-gray-950"
+                    : "text-gray-400 hover:bg-gray-800 hover:text-white"
+                }`}
+                title={handRaised ? "Lower hand" : "Raise hand"}
+              >
+                &#9995;
+              </button>
+              <button
+                onClick={() => setShowGallery(true)}
+                className="p-1.5 rounded text-gray-400 hover:bg-gray-800 hover:text-white transition-colors cursor-pointer"
+                title="Video Gallery"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                </svg>
+              </button>
               <button
                 onClick={copyInviteLink}
                 className={`p-1.5 rounded transition-colors cursor-pointer ${
@@ -1200,6 +1388,10 @@ export default function EditorPage({ roomId }) {
           showChat={showChat}
           lastSaved={lastSavedTime ? new Date(lastSavedTime).toLocaleTimeString() : null}
           isSaving={isSaving}
+          onRun={() => setShowRunner(true)}
+          onSnippets={() => setShowSnippets(true)}
+          onDownloadFile={handleDownloadFile}
+          onDownloadProject={handleDownloadProject}
         />
 
         <div className="flex-1 overflow-hidden relative">
@@ -1320,6 +1512,25 @@ export default function EditorPage({ roomId }) {
         />
       )}
 
+      {showRunner && (
+        <ExecutionPanel
+          code={selectedFileId ? getFileContent(selectedFileId) : ""}
+          language={selectedFileLanguage}
+          onClose={() => setShowRunner(false)}
+          onInsertSnippet={(code, lang) => {
+            setShowRunner(false)
+            setShowSnippets(true)
+          }}
+        />
+      )}
+
+      {showSnippets && (
+        <SnippetManager
+          onInsertCode={handleInsertSnippet}
+          onClose={() => setShowSnippets(false)}
+        />
+      )}
+
       {diffSnapshot && (
         <DiffView
           label={diffSnapshot.message || diffSnapshot.label}
@@ -1344,6 +1555,91 @@ export default function EditorPage({ roomId }) {
           })()}
           onClose={() => setDiffSnapshot(null)}
         />
+      )}
+      {/* Raise hand notifications */}
+      {showGallery && (
+        <VideoGallery
+          remoteStreams={remoteStreams}
+          localStream={videoEnabled ? localStream : null}
+          users={users}
+          user={user}
+          pinnedUser={pinnedUser}
+          onPin={setPinnedUser}
+          onClose={() => setShowGallery(false)}
+        />
+      )}
+      {users.filter((u) => u.handRaised && u.username !== user?.username).map((u) => (
+        <div
+          key={u.username}
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500/20 border border-amber-500/40 shadow-lg backdrop-blur-sm"
+        >
+          <span className="text-lg">&#9995;</span>
+          <span className="text-sm font-medium text-amber-300">{u.username} raised their hand</span>
+        </div>
+      ))}
+
+      {/* Pinned remote video window only */}
+      {pinnedUser && remoteStreams[pinnedUser] && (
+        <VideoWindow
+          key={pinnedUser}
+          stream={remoteStreams[pinnedUser]}
+          label={users.find((u) => u.username !== user?.username && u.username === pinnedUser)?.username || pinnedUser}
+          color={users.find((u) => u.username !== user?.username && u.username === pinnedUser)?.color || "#60a5fa"}
+          isLocal={false}
+          onClose={() => setPinnedUser(null)}
+        />
+      )}
+
+      {/* Camera on toast */}
+      {(() => {
+        const remoteCameraCount = Object.keys(remoteStreams).length
+        if (remoteCameraCount === 0 || cameraToastDismissed) return null
+        return (
+          <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2.5 px-3.5 py-2 rounded-lg bg-gray-800/95 border border-gray-600 shadow-lg backdrop-blur-sm">
+            <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse shrink-0" />
+            <span className="text-xs text-gray-300">
+              {remoteCameraCount === 1 ? "1 person has" : `${remoteCameraCount} people have`} their camera on
+            </span>
+            <button
+              onClick={() => { setShowGallery(true); setCameraToastDismissed(true) }}
+              className="text-xs font-semibold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer shrink-0"
+            >
+              See in Gallery
+            </button>
+            <button
+              onClick={() => setCameraToastDismissed(true)}
+              className="text-gray-500 hover:text-gray-300 transition-colors cursor-pointer shrink-0"
+              title="Dismiss"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )
+      })()}
+
+      {/* Voice chat indicator bar */}
+      {(audioEnabled || videoEnabled) && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-800/90 border border-gray-600 shadow-lg backdrop-blur-sm">
+          {audioEnabled && (
+            <span className="flex items-center gap-1 text-[10px] text-green-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              Mic On
+            </span>
+          )}
+          {videoEnabled && (
+            <span className="flex items-center gap-1 text-[10px] text-blue-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+              Video On
+            </span>
+          )}
+          {Object.keys(remoteStreams).length > 0 && (
+            <span className="text-[10px] text-gray-400">
+              {Object.keys(remoteStreams).length} connected
+            </span>
+          )}
+        </div>
       )}
     </main>
   )

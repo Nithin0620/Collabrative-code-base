@@ -16,6 +16,10 @@ export default function EditorToolbar({
   showChat,
   lastSaved,
   isSaving,
+  onRun,
+  onSnippets,
+  onDownloadFile,
+  onDownloadProject,
 }) {
   const lang = filename ? getFileInfo(filename) : null
 
@@ -96,6 +100,58 @@ export default function EditorToolbar({
         >
           History
         </button>
+
+        <div className="w-px h-4 bg-gray-700" />
+
+        <button
+          onClick={onRun}
+          className="px-2.5 py-1 rounded bg-green-600 text-white text-xs font-semibold hover:bg-green-500 transition-colors cursor-pointer"
+          title="Run code (Ctrl+Enter)"
+        >
+          <span className="flex items-center gap-1">
+            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            Run
+          </span>
+        </button>
+        <button
+          onClick={onSnippets}
+          className="px-2.5 py-1 rounded bg-gray-800 border border-gray-700 text-gray-300 text-xs hover:bg-gray-700 hover:text-white transition-colors cursor-pointer"
+          title="Snippets"
+        >
+          Snippets
+        </button>
+
+        <div className="w-px h-4 bg-gray-700" />
+
+        <div className="relative group">
+          <button
+            className="px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-300 text-xs hover:bg-gray-700 hover:text-white transition-colors cursor-pointer"
+            title="Download"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+          </button>
+          <div className="absolute right-0 top-full mt-1 hidden group-hover:block z-50 bg-gray-800 border border-gray-700 rounded shadow-lg min-w-[120px]">
+            <button
+              onClick={onDownloadFile}
+              className="w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors cursor-pointer"
+            >
+              Current File
+            </button>
+            <button
+              onClick={onDownloadProject}
+              className="w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors border-t border-gray-700 cursor-pointer"
+            >
+              Project (.zip)
+            </button>
+          </div>
+        </div>
+
+        <div className="w-px h-4 bg-gray-700" />
+
         <button
           onClick={onToggleComments}
           className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${

@@ -13,6 +13,8 @@ import authRoutes from "./routes/auth.js"
 import projectRoutes from "./routes/projects.js"
 import commentRoutes from "./routes/comments.js"
 import chatRoutes from "./routes/chat.js"
+import executeRoutes from "./routes/execute.js"
+import snippetRoutes from "./routes/snippets.js"
 import User from "./models/User.js"
 
 await connectDB()
@@ -62,6 +64,10 @@ app.use("/auth", authRoutes)
 app.use("/api/projects", projectRoutes)
 app.use("/api/comments", commentRoutes)
 app.use("/api/chat", chatRoutes)
+app.use("/api/execute", executeRoutes)
+app.use("/api/snippets", snippetRoutes)
+
+const roomMembers = new Map()
 
 io.on("connection", (socket) => {
   socket.on("chat-message", (data) => {
@@ -69,6 +75,62 @@ io.on("connection", (socket) => {
   })
   socket.on("join-room", (roomId) => {
     socket.join(roomId)
+    if (!roomMembers.has(roomId)) roomMembers.set(roomId, new Set())
+    roomMembers.get(roomId).add(socket.id)
+    socket.data.roomId = roomId
+
+    const members = Array.from(roomMembers.get(roomId) || [])
+    socket.emit("room-members", { members, selfId: socket.id })
+    socket.to(roomId).emit("peer-joined", { peerId: socket.id })
+  })
+
+  socket.on("get-room-members", (roomId, cb) => {
+    const members = Array.from(roomMembers.get(roomId) || [])
+    cb({ members, selfId: socket.id })
+  })
+
+  socket.on("webrtc-offer", (data) => {
+    if (data.to) {
+      io.to(data.to).emit("webrtc-offer", {
+        offer: data.offer,
+        from: socket.id,
+      })
+    }
+  })
+
+  socket.on("webrtc-answer", (data) => {
+    if (data.to) {
+      io.to(data.to).emit("webrtc-answer", {
+        answer: data.answer,
+        from: socket.id,
+      })
+    }
+  })
+
+  socket.on("webrtc-candidate", (data) => {
+    if (data.to) {
+      io.to(data.to).emit("webrtc-candidate", {
+        candidate: data.candidate,
+        from: socket.id,
+      })
+    }
+  })
+
+  socket.on("webrtc-end", (data) => {
+    if (data.to) {
+      io.to(data.to).emit("webrtc-end", { from: socket.id })
+    }
+  })
+
+  socket.on("disconnect", () => {
+    const roomId = socket.data.roomId
+    if (roomId && roomMembers.has(roomId)) {
+      roomMembers.get(roomId).delete(socket.id)
+      if (roomMembers.get(roomId).size === 0) {
+        roomMembers.delete(roomId)
+      }
+      socket.to(roomId).emit("peer-left", { peerId: socket.id })
+    }
   })
 })
 

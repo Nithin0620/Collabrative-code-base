@@ -4,6 +4,7 @@ const EXTENSION_MAP = {
   ts:   { language: "typescript",  label: "TS",    color: "#3178c6" },
   tsx:  { language: "typescript",  label: "React", color: "#61dafb" },
   py:   { language: "python",      label: "PY",    color: "#3776ab" },
+  rb:   { language: "ruby",        label: "Ruby",  color: "#cc342d" },
   java: { language: "java",        label: "Java",  color: "#ed8b00" },
   cpp:  { language: "cpp",         label: "C++",   color: "#00599c" },
   c:    { language: "c",           label: "C",     color: "#a8b9cc" },
