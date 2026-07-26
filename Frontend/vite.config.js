@@ -11,6 +11,12 @@ export default defineConfig({
         target: "http://localhost:3000",
         ws: true,
       },
+      "/auth": {
+        target: "http://localhost:3000",
+      },
+      "/api": {
+        target: "http://localhost:3000",
+      },
     },
   },
 })
