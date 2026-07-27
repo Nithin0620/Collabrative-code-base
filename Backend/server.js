@@ -15,7 +15,12 @@ import commentRoutes from "./routes/comments.js"
 import chatRoutes from "./routes/chat.js"
 import executeRoutes from "./routes/execute.js"
 import snippetRoutes from "./routes/snippets.js"
+import testCaseRoutes from "./routes/testCases.js"
+import { createWorker } from "./utils/execQueue.js"
+import { executeCode } from "./utils/sandboxRunner.js"
 import User from "./models/User.js"
+import Project from "./models/Project.js"
+import { getUserProjectRole } from "./middleware/auth.js"
 
 await connectDB()
 configurePassport()
@@ -60,12 +65,15 @@ io.use(async (socket, next) => {
 const ySocketIO = new YSocketIO(io)
 ySocketIO.initialize()
 
+createWorker(executeCode, io)
+
 app.use("/auth", authRoutes)
 app.use("/api/projects", projectRoutes)
 app.use("/api/comments", commentRoutes)
 app.use("/api/chat", chatRoutes)
 app.use("/api/execute", executeRoutes)
 app.use("/api/snippets", snippetRoutes)
+app.use("/api/testcases", testCaseRoutes)
 
 const roomMembers = new Map()
 
@@ -73,15 +81,42 @@ io.on("connection", (socket) => {
   socket.on("chat-message", (data) => {
     socket.to(data.roomId).emit("chat-message", data)
   })
-  socket.on("join-room", (roomId) => {
+  socket.on("join-room", async (roomId) => {
+    if (socket.user) {
+      try {
+        const project = await Project.findOne({ roomId })
+        if (project) {
+          const userId = socket.user._id.toString()
+          if (project.bannedUsers?.includes(userId)) {
+            socket.emit("room-error", { message: "You are banned from this room" })
+            return
+          }
+          const role = getUserProjectRole(project, userId)
+          if (!role && project.settings?.inviteOnly) {
+            socket.emit("room-error", { message: "This room is invite-only" })
+            return
+          }
+          socket.data.userRole = role || "editor"
+        }
+      } catch (err) {
+        socket.data.userRole = "editor"
+      }
+    } else {
+      socket.data.userRole = "viewer"
+    }
+
     socket.join(roomId)
     if (!roomMembers.has(roomId)) roomMembers.set(roomId, new Set())
     roomMembers.get(roomId).add(socket.id)
     socket.data.roomId = roomId
 
     const members = Array.from(roomMembers.get(roomId) || [])
-    socket.emit("room-members", { members, selfId: socket.id })
-    socket.to(roomId).emit("peer-joined", { peerId: socket.id })
+    socket.emit("room-members", { members, selfId: socket.id, userRole: socket.data.userRole })
+    socket.to(roomId).emit("peer-joined", { peerId: socket.id, userRole: socket.data.userRole })
+  })
+
+  socket.on("join-execution", (executionId) => {
+    socket.join("exec:" + executionId)
   })
 
   socket.on("get-room-members", (roomId, cb) => {

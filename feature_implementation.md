@@ -421,6 +421,19 @@ CMD ["node", "server.js"]
 
 ## Completed
 
+### Phase 5 - Coding Features
+- Docker sandbox execution via dockerode (with child_process fallback)
+- Supported languages: JavaScript, Python, Java, C++, C, Ruby, Go
+- Stop Execution — kill running processes/containers from UI
+- Memory usage tracking per execution
+- Custom Test Cases — save, edit, delete, filter by language
+- Run single, selected, or all test cases against code
+- Persistent Snippets — stored in MongoDB (was in-memory Map)
+- Download Code — single file + project ZIP (already existed)
+- Sandbox indicator (Docker Sandbox vs No Sandbox badge)
+- docker-compose.yml for local dev (mongo + api + sandbox builder)
+- Resource limits: 256MB memory, 50% CPU, 15s timeout, no network, 100 PIDs
+
 ### Phase 1 - Project Setup
 - React 19 + Vite + Tailwind CSS 4 (frontend)
 - Express 5 + Socket.IO + Yjs (backend)

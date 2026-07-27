@@ -209,7 +209,7 @@ function TreeRecursive({ items, depth, selectedFileId, activeFolderId, draggedId
   ))
 }
 
-export default function FileExplorer({ fileTree, selectedFileId, onSelect, onCreateFile, onCreateFolder, onRename, onDelete, onMove }) {
+export default function FileExplorer({ fileTree, selectedFileId, onSelect, onCreateFile, onCreateFolder, onRename, onDelete, onMove, readOnly }) {
   const [contextMenu, setContextMenu] = useState(null)
   const [showNew, setShowNew] = useState(null)
   const [newName, setNewName] = useState("")
@@ -276,6 +276,7 @@ export default function FileExplorer({ fileTree, selectedFileId, onSelect, onCre
   }
 
   const handleDragStart = (e, itemId) => {
+    if (readOnly) return
     setDraggedId(itemId)
     e.dataTransfer.effectAllowed = "move"
     e.dataTransfer.setData("text/plain", itemId)
@@ -351,20 +352,25 @@ export default function FileExplorer({ fileTree, selectedFileId, onSelect, onCre
       )}
 
       <div className="px-2 py-2 border-b border-gray-800">
-        <div className="flex gap-1">
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowNew("file"); setContextMenu(null) }}
-            className="flex-1 min-w-0 px-2 py-1 rounded text-[11px] text-gray-400 bg-gray-800 hover:bg-gray-700 hover:text-gray-300 transition-colors cursor-pointer truncate"
-          >
-            + File
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowNew("folder"); setContextMenu(null) }}
-            className="flex-1 min-w-0 px-2 py-1 rounded text-[11px] text-gray-400 bg-gray-800 hover:bg-gray-700 hover:text-gray-300 transition-colors cursor-pointer truncate"
-          >
-            + Folder
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="flex gap-1">
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowNew("file"); setContextMenu(null) }}
+              className="flex-1 min-w-0 px-2 py-1 rounded text-[11px] text-gray-400 bg-gray-800 hover:bg-gray-700 hover:text-gray-300 transition-colors cursor-pointer truncate"
+            >
+              + File
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowNew("folder"); setContextMenu(null) }}
+              className="flex-1 min-w-0 px-2 py-1 rounded text-[11px] text-gray-400 bg-gray-800 hover:bg-gray-700 hover:text-gray-300 transition-colors cursor-pointer truncate"
+            >
+              + Folder
+            </button>
+          </div>
+        )}
+        {readOnly && (
+          <p className="text-[10px] text-gray-500 text-center">Read-only mode</p>
+        )}
         {activeFolderId && fileTree[activeFolderId] && (
           <p className="text-[10px] text-gray-500 mt-1 truncate">
             Creating in: {fileTree[activeFolderId].name}
@@ -435,7 +441,7 @@ export default function FileExplorer({ fileTree, selectedFileId, onSelect, onCre
           </div>
         )}
 
-        {contextMenu && (
+        {contextMenu && !readOnly && (
           <div
             ref={menuRef}
             className="fixed z-50 bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 min-w-[160px]"

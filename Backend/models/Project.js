@@ -11,6 +11,7 @@ const snapshotSchema = new mongoose.Schema({
   label: { type: String, default: "" },
   message: { type: String, default: "" },
   author: { type: String, default: "" },
+  authorAvatar: { type: String, default: "" },
   filesCount: { type: Number, default: 0 },
   fileNames: { type: [String], default: [] },
   timestamp: { type: Date, default: Date.now },
@@ -38,6 +39,21 @@ const projectSchema = new mongoose.Schema(
     settings: {
       theme: { type: String, default: "vs-dark" },
       fontSize: { type: Number, default: 14 },
+      inviteOnly: { type: Boolean, default: false },
+      readOnly: { type: Boolean, default: false },
+      password: { type: String, default: "" },
+    },
+    members: {
+      type: Map,
+      of: new mongoose.Schema({
+        role: { type: String, enum: ["owner", "editor", "viewer"], default: "editor" },
+        joinedAt: { type: Date, default: Date.now },
+      }, { _id: false }),
+      default: new Map(),
+    },
+    bannedUsers: {
+      type: [String],
+      default: [],
     },
     history: [snapshotSchema],
     createdBy: {

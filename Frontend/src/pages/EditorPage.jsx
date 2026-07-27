@@ -19,9 +19,16 @@ import CommentsPanel from "../components/CommentsPanel"
 import ChatPanel from "../components/ChatPanel"
 import ExecutionPanel from "../components/ExecutionPanel"
 import SnippetManager from "../components/SnippetManager"
+import TestCaseManager from "../components/TestCaseManager"
+import MouseOverlay from "../components/MouseOverlay"
+import MinimapOverlay from "../components/MinimapOverlay"
 import VideoWindow from "../components/VideoWindow"
 import VideoGallery from "../components/VideoGallery"
 import useWebRTC from "../hooks/useWebRTC"
+import useProjectRole from "../hooks/useProjectRole"
+import RoleBadge from "../components/RoleBadge"
+import RoleManager from "../components/RoleManager"
+import PasswordPrompt from "../components/PasswordPrompt"
 import { downloadFile, downloadProjectAsZip } from "../lib/download"
 
 const IDLE_TIMEOUT = 30000
@@ -49,14 +56,38 @@ function UserAvatar({ user }) {
 }
 
 function StatusDot({ status }) {
+  const color = status === "offline" ? "bg-gray-500" : status === "idle" ? "bg-yellow-400" : "bg-green-400"
+  const title = status === "offline" ? "Offline" : status === "idle" ? "Idle" : "Active"
   return (
     <span
-      className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${
-        status === "idle" ? "bg-yellow-400" : "bg-green-400"
-      }`}
-      title={status === "idle" ? "Idle" : "Active"}
+      className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${color}`}
+      title={title}
     />
   )
+}
+
+function RelativeTime({ timestamp }) {
+  const [text, setText] = useState(() => formatRelativeTime(timestamp))
+
+  useEffect(() => {
+    setText(formatRelativeTime(timestamp))
+    const interval = setInterval(() => setText(formatRelativeTime(timestamp)), 10000)
+    return () => clearInterval(interval)
+  }, [timestamp])
+
+  return <span title={new Date(timestamp).toLocaleString()}>{text}</span>
+}
+
+function formatRelativeTime(ts) {
+  if (!ts) return ""
+  const seconds = Math.floor((Date.now() - ts) / 1000)
+  if (seconds < 5) return "just now"
+  if (seconds < 60) return seconds + "s ago"
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return minutes + "m ago"
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return hours + "h ago"
+  return Math.floor(hours / 24) + "d ago"
 }
 
 function injectCursorStyles(awareness, localClientID) {
@@ -122,6 +153,7 @@ export default function EditorPage({ roomId }) {
   const typingTimeoutRef = useRef(null)
   const autoSaveRef = useRef(null)
   const saveProjectRef = useRef(null)
+  const knownUsersRef = useRef(new Map())
 
   const [users, setUsers] = useState([])
   const [usersMap, setUsersMap] = useState(new Map())
@@ -135,6 +167,13 @@ export default function EditorPage({ roomId }) {
   const [pinnedUser, setPinnedUser] = useState(null)
   const [showGallery, setShowGallery] = useState(false)
   const [cameraToastDismissed, setCameraToastDismissed] = useState(false)
+  const [scrollSyncEnabled, setScrollSyncEnabled] = useState(true)
+  const [remoteMousePositions, setRemoteMousePositions] = useState({})
+  const [showRoleManager, setShowRoleManager] = useState(false)
+  const [needsPassword, setNeedsPassword] = useState(false)
+  const [passwordVerified, setPasswordVerified] = useState(false)
+
+  const { role, members, bannedUsers, settings, canEdit, isOwner, fetchProject, fetchMembers, addMember, changeRole, kickUser, banUser, unbanUser, updateSettings } = useProjectRole(roomId)
 
   const {
     localStream,
@@ -163,9 +202,12 @@ export default function EditorPage({ roomId }) {
   const [showHistory, setShowHistory] = useState(false)
   const [showSnapshotDialog, setShowSnapshotDialog] = useState(false)
   const [diffSnapshot, setDiffSnapshot] = useState(null)
+  const [compareSnapshots, setCompareSnapshots] = useState(null)
   const [showComments, setShowComments] = useState(false)
   const [showRunner, setShowRunner] = useState(false)
   const [showSnippets, setShowSnippets] = useState(false)
+  const [showTestCases, setShowTestCases] = useState(false)
+  const [pendingTestCases, setPendingTestCases] = useState(null)
   const [selectionInfo, setSelectionInfo] = useState(null)
   const [fileComments, setFileComments] = useState([])
   const [focusedCommentId, setFocusedCommentId] = useState(null)
@@ -266,6 +308,7 @@ export default function EditorPage({ roomId }) {
           label: "v" + version,
           message: message || "",
           author: user?.username || "",
+          authorAvatar: user?.avatar || "",
           filesCount: fileItems.length,
           fileNames: fileItems.map((item) => item.name),
         }),
@@ -382,12 +425,59 @@ export default function EditorPage({ roomId }) {
   }, [selectedFileId, monaco])
 
   useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !providerRef.current) return
+    const awareness = providerRef.current.awareness
+
+    const disposable = editor.onMouseMove((e) => {
+      const state = awareness.getLocalState()
+      if (!state?.user) return
+      const editorDom = editor.getDomNode()
+      if (!editorDom) return
+      const rect = editorDom.getBoundingClientRect()
+      const nativeEvent = e.browserEvent
+      awareness.setLocalStateField("user", {
+        ...state.user,
+        mousePos: {
+          x: nativeEvent.clientX - rect.left,
+          y: nativeEvent.clientY - rect.top,
+          pageX: nativeEvent.pageX,
+          pageY: nativeEvent.pageY,
+          fileId: selectedFileId,
+        },
+      })
+    })
+    return () => disposable.dispose()
+  }, [selectedFileId, monaco])
+
+  useEffect(() => {
+    if (!providerRef.current) return
+    const awareness = providerRef.current.awareness
+
+    const onAwareness = () => {
+      const states = Array.from(awareness.getStates().entries())
+      const positions = {}
+      const localId = ydoc.clientID
+      for (const [clientID, state] of states) {
+        if (clientID === localId) continue
+        if (state.user?.mousePos && state.user.mousePos.fileId === selectedFileId) {
+          positions[clientID] = { ...state.user.mousePos, color: state.user.color, name: state.user.name || state.user.username }
+        }
+      }
+      setRemoteMousePositions(positions)
+    }
+    awareness.on("change", onAwareness)
+    return () => awareness.off("change", onAwareness)
+  }, [selectedFileId, ydoc])
+
+  useEffect(() => {
     if (!followedUser || !providerRef.current) return
     const awareness = providerRef.current.awareness
     const editor = editorRef.current
     if (!editor) return
 
     const onAwareness = () => {
+      if (!scrollSyncEnabled) return
       const states = Array.from(awareness.getStates().entries())
       for (const [clientID, state] of states) {
         if (state.user?.username !== followedUser) continue
@@ -412,7 +502,7 @@ export default function EditorPage({ roomId }) {
 
     awareness.on("change", onAwareness)
     return () => awareness.off("change", onAwareness)
-  }, [followedUser, selectedFileId])
+  }, [followedUser, selectedFileId, scrollSyncEnabled])
 
   useEffect(() => {
     if (!providerRef.current) return
@@ -426,6 +516,17 @@ export default function EditorPage({ roomId }) {
       handRaised,
     })
   }, [audioEnabled, videoEnabled, handRaised])
+
+  useEffect(() => {
+    if (!providerRef.current || !role) return
+    const awareness = providerRef.current.awareness
+    const state = awareness.getLocalState()
+    if (!state?.user) return
+    awareness.setLocalStateField("user", {
+      ...state.user,
+      role,
+    })
+  }, [role])
 
   useEffect(() => {
     if (!selectedFileId) {
@@ -617,6 +718,7 @@ export default function EditorPage({ roomId }) {
       videoEnabled: false,
       handRaised: false,
       lastActive: Date.now(),
+      role: role || "editor",
     })
 
     const fetchProject = async () => {
@@ -722,18 +824,45 @@ export default function EditorPage({ roomId }) {
     }, AUTO_SAVE_INTERVAL)
 
     const updateUsers = () => {
-      const states = Array.from(awareness.getStates().values())
-      const filtered = states
-        .filter((s) => s.user && s.user.username)
-        .map((s) => s.user)
+      const states = Array.from(awareness.getStates().entries())
+      const activeUsers = states
+        .filter(([, s]) => s.user && s.user.username)
+        .map(([, s]) => s.user)
 
-      setUsers(filtered)
+      const now = Date.now()
+      const OFFLINE_GRACE_MS = 30000
+
+      activeUsers.forEach((u) => {
+        knownUsersRef.current.set(u.username, { ...u, status: u.status || "active" })
+      })
+
+      const allKnown = Array.from(knownUsersRef.current.values())
+      const merged = allKnown.map((u) => {
+        const isActive = activeUsers.some((a) => a.username === u.username)
+        if (isActive) return u
+        const lastSeen = u.lastActive || 0
+        if (now - lastSeen < OFFLINE_GRACE_MS) return { ...u, status: "idle" }
+        return { ...u, status: "offline" }
+      }).filter((u) => {
+        if (u.status === "offline" && now - (u.lastActive || 0) > OFFLINE_GRACE_MS * 3) {
+          knownUsersRef.current.delete(u.username)
+          return false
+        }
+        return true
+      })
+
+      const localUsername = user.username
+      const withSelf = merged.filter((u) => u.username === localUsername)
+      const others = merged.filter((u) => u.username !== localUsername)
+      const final = [...withSelf, ...others]
+
+      setUsers(final)
 
       const map = new Map()
-      filtered.forEach((u) => map.set(u.username, u))
+      final.forEach((u) => map.set(u.username, u))
       setUsersMap(map)
 
-      const typing = filtered
+      const typing = final
         .filter((u) => u.typing && u.username !== user.username)
         .map((u) => u.username)
       setTypingUsers(typing)
@@ -775,6 +904,27 @@ export default function EditorPage({ roomId }) {
       if (styleEl) styleEl.remove()
     }
   }, [user, token, ydoc, yFileTree, roomId])
+
+  useEffect(() => {
+    if (!roomId || passwordVerified) return
+    if (!settings || Object.keys(settings).length === 0) return
+    if (role !== null) return
+    if (settings.hasPassword) {
+      setNeedsPassword(true)
+      return
+    }
+    fetch("/api/projects/" + roomId + "/join", { method: "POST", credentials: "include" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.requiresPassword) {
+          setNeedsPassword(true)
+        } else if (data.success) {
+          fetchProject()
+          fetchMembers()
+        }
+      })
+      .catch(() => {})
+  }, [roomId, settings, role, passwordVerified, fetchProject, fetchMembers])
 
   const addCommentRef = useRef(null)
 
@@ -864,49 +1014,56 @@ export default function EditorPage({ roomId }) {
   }, [yFileTree])
 
   const handleRestore = useCallback((snapshot) => {
-    const currentTree = getFileTreeObj()
+    handleSnapshot("Auto-saved before restore").then(() => {
+      const currentTree = getFileTreeObj()
 
-    ydoc.transact(() => {
-      Object.values(currentTree)
-        .filter((item) => item.type === "file")
-        .forEach((item) => {
-          const text = ydoc.getText("file:" + item.id)
-          if (text.length > 0) text.delete(0, text.length)
-        })
+      ydoc.transact(() => {
+        Object.values(currentTree)
+          .filter((item) => item.type === "file")
+          .forEach((item) => {
+            const text = ydoc.getText("file:" + item.id)
+            if (text.length > 0) text.delete(0, text.length)
+          })
 
-      yFileTree.clear()
-      if (snapshot.fileTree) {
-        Object.entries(snapshot.fileTree).forEach(([key, val]) => {
-          yFileTree.set(key, val)
-        })
+        yFileTree.clear()
+        if (snapshot.fileTree) {
+          Object.entries(snapshot.fileTree).forEach(([key, val]) => {
+            yFileTree.set(key, val)
+          })
+        }
+
+        if (snapshot.files && Array.isArray(snapshot.files)) {
+          snapshot.files.forEach((f) => {
+            const text = ydoc.getText("file:" + f.id)
+            if (text.length > 0) text.delete(0, text.length)
+            if (f.content) text.insert(0, f.content)
+          })
+        }
+      })
+
+      if (snapshot.settings) {
+        if (snapshot.settings.theme) setTheme(snapshot.settings.theme)
+        if (snapshot.settings.fontSize) setFontSize(snapshot.settings.fontSize)
       }
 
-      if (snapshot.files && Array.isArray(snapshot.files)) {
-        snapshot.files.forEach((f) => {
-          const text = ydoc.getText("file:" + f.id)
-          if (text.length > 0) text.delete(0, text.length)
-          if (f.content) text.insert(0, f.content)
-        })
+      const tree = {}
+      yFileTree.forEach((val, key) => { tree[key] = val })
+      const firstFile = Object.values(tree).find((item) => item.type === "file")
+      if (firstFile) {
+        setSelectedFileId(firstFile.id)
+      } else {
+        setSelectedFileId(null)
       }
     })
-
-    if (snapshot.settings) {
-      if (snapshot.settings.theme) setTheme(snapshot.settings.theme)
-      if (snapshot.settings.fontSize) setFontSize(snapshot.settings.fontSize)
-    }
-
-    const tree = {}
-    yFileTree.forEach((val, key) => { tree[key] = val })
-    const firstFile = Object.values(tree).find((item) => item.type === "file")
-    if (firstFile) {
-      setSelectedFileId(firstFile.id)
-    } else {
-      setSelectedFileId(null)
-    }
-  }, [ydoc, yFileTree, getFileTreeObj])
+  }, [ydoc, yFileTree, getFileTreeObj, handleSnapshot])
 
   const handleDiff = useCallback((snapshot) => {
     setDiffSnapshot(snapshot)
+    setShowHistory(false)
+  }, [])
+
+  const handleCompareTwoSnapshots = useCallback((snap1, snap2) => {
+    setCompareSnapshots({ left: snap1, right: snap2 })
     setShowHistory(false)
   }, [])
 
@@ -1069,6 +1226,7 @@ export default function EditorPage({ roomId }) {
             onRename={handleRename}
             onDelete={handleDelete}
             onMove={handleMove}
+            readOnly={!canEdit}
           />
         )}
 
@@ -1110,6 +1268,7 @@ export default function EditorPage({ roomId }) {
                     <span className="text-xs font-medium truncate min-w-0" style={{ color: u.color }}>
                       {u.username}{isMe ? " (you)" : ""}
                     </span>
+                    <RoleBadge role={u.role} />
                     <div className="flex items-center gap-0.5 shrink-0">
                       {u.handRaised && (
                         <span className="text-[11px]" title="Hand raised">&#9995;</span>
@@ -1127,6 +1286,9 @@ export default function EditorPage({ roomId }) {
                       )}
                     </div>
                     <span className="text-[9px] text-gray-500 shrink-0">
+                      {u.status === "offline" && u.lastActive && (
+                        <RelativeTime timestamp={u.lastActive} />
+                      )}
                       {u.status === "idle" && "Idle"}
                       {u.typing && !isMe && "..."}
                     </span>
@@ -1182,6 +1344,17 @@ export default function EditorPage({ roomId }) {
               <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
               <span className="text-[10px] text-amber-300 flex-1 truncate">Following {followedUser}</span>
               <button
+                onClick={() => setScrollSyncEnabled(!scrollSyncEnabled)}
+                className={`px-1.5 py-0.5 rounded text-[9px] font-medium transition-colors cursor-pointer ${
+                  scrollSyncEnabled
+                    ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                    : "bg-gray-700 text-gray-400 border border-gray-600"
+                }`}
+                title={scrollSyncEnabled ? "Scroll sync ON - click to disable" : "Scroll sync OFF - click to enable"}
+              >
+                {scrollSyncEnabled ? "Scroll" : "NoScroll"}
+              </button>
+              <button
                 onClick={() => setFollowedUser(null)}
                 className="text-[9px] text-amber-400 hover:text-amber-300 font-semibold cursor-pointer"
               >
@@ -1207,6 +1380,18 @@ export default function EditorPage({ roomId }) {
         <div className={`mt-auto border-t border-gray-700 ${sidebarCollapsed ? "px-1.5 py-2 flex flex-col items-center gap-1.5" : "px-2 py-2 space-y-1.5"}`}>
           {!sidebarCollapsed && (
             <>
+              {isOwner && (
+                <button
+                  onClick={() => setShowRoleManager(true)}
+                  className="w-full flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-colors cursor-pointer"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  Manage Room
+                </button>
+              )}
               <div className="flex gap-1">
                 <button
                   onClick={toggleAudio}
@@ -1390,6 +1575,7 @@ export default function EditorPage({ roomId }) {
           isSaving={isSaving}
           onRun={() => setShowRunner(true)}
           onSnippets={() => setShowSnippets(true)}
+          onTestCases={() => setShowTestCases(true)}
           onDownloadFile={handleDownloadFile}
           onDownloadProject={handleDownloadProject}
         />
@@ -1404,13 +1590,20 @@ export default function EditorPage({ roomId }) {
                 onMount={handleMount}
                 options={{
                   fontSize,
-                  minimap: { enabled: true },
+                  minimap: { enabled: true, scale: 1 },
                   scrollBeyondLastLine: false,
                   wordWrap: "on",
                   automaticLayout: true,
                   tabSize: 2,
                   glyphMargin: true,
                 }}
+              />
+              <MouseOverlay positions={remoteMousePositions} />
+              <MinimapOverlay
+                editorRef={editorRef}
+                users={users}
+                localUsername={user?.username}
+                monaco={monaco}
               />
               {selectionInfo && (
                 <button
@@ -1494,6 +1687,32 @@ export default function EditorPage({ roomId }) {
           onClose={() => setShowHistory(false)}
           onRestore={handleRestore}
           onDiff={handleDiff}
+          onCompareTwoSnapshots={handleCompareTwoSnapshots}
+        />
+      )}
+
+      {showRoleManager && (
+        <RoleManager
+          roomId={roomId}
+          members={members}
+          bannedUsers={bannedUsers}
+          settings={settings}
+          isOwner={isOwner}
+          onAddMember={addMember}
+          onChangeRole={changeRole}
+          onKick={kickUser}
+          onBan={banUser}
+          onUnban={unbanUser}
+          onUpdateSettings={updateSettings}
+          onClose={() => setShowRoleManager(false)}
+        />
+      )}
+
+      {needsPassword && (
+        <PasswordPrompt
+          roomId={roomId}
+          onVerified={() => { setNeedsPassword(false); setPasswordVerified(true); fetchProject(); fetchMembers() }}
+          onCancel={() => setNeedsPassword(false)}
         />
       )}
 
@@ -1516,10 +1735,28 @@ export default function EditorPage({ roomId }) {
         <ExecutionPanel
           code={selectedFileId ? getFileContent(selectedFileId) : ""}
           language={selectedFileLanguage}
-          onClose={() => setShowRunner(false)}
+          onClose={() => { setShowRunner(false); setPendingTestCases(null) }}
           onInsertSnippet={(code, lang) => {
             setShowRunner(false)
             setShowSnippets(true)
+          }}
+          onOpenTestCases={() => {
+            setShowRunner(false)
+            setShowTestCases(true)
+          }}
+          testCases={pendingTestCases}
+          onTestCasesConsumed={() => setPendingTestCases(null)}
+        />
+      )}
+
+      {showTestCases && (
+        <TestCaseManager
+          currentLanguage={selectedFileLanguage}
+          onClose={() => setShowTestCases(false)}
+          onRunTestCases={(testCases) => {
+            setShowTestCases(false)
+            setPendingTestCases(testCases)
+            setShowRunner(true)
           }}
         />
       )}
@@ -1554,6 +1791,32 @@ export default function EditorPage({ roomId }) {
             }
           })()}
           onClose={() => setDiffSnapshot(null)}
+        />
+      )}
+
+      {compareSnapshots && (
+        <DiffView
+          leftLabel={compareSnapshots.left.message || compareSnapshots.left.label || "Snapshot 1"}
+          rightLabel={compareSnapshots.right.message || compareSnapshots.right.label || "Snapshot 2"}
+          snapshotFiles={(() => {
+            try {
+              const parsed = JSON.parse(compareSnapshots.left.data)
+              return (parsed.files || []).map((f) => ({
+                ...f,
+                name: parsed.fileTree?.[f.id]?.name || f.id,
+              }))
+            } catch { return [] }
+          })()}
+          currentFiles={(() => {
+            try {
+              const parsed = JSON.parse(compareSnapshots.right.data)
+              return (parsed.files || []).map((f) => ({
+                ...f,
+                name: parsed.fileTree?.[f.id]?.name || f.id,
+              }))
+            } catch { return [] }
+          })()}
+          onClose={() => setCompareSnapshots(null)}
         />
       )}
       {/* Raise hand notifications */}

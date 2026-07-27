@@ -14,7 +14,7 @@ function FileIcon({ filename, size = 16 }) {
   )
 }
 
-export default function DiffView({ label, currentFiles, snapshotFiles, onClose }) {
+export default function DiffView({ label, leftLabel, rightLabel, currentFiles, snapshotFiles, onClose }) {
   const currentMap = useMemo(() => {
     const map = {}
     ;(currentFiles || []).forEach((f) => { map[f.id] = f })
@@ -64,9 +64,15 @@ export default function DiffView({ label, currentFiles, snapshotFiles, onClose }
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700 shrink-0">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-bold text-white">Diff</h2>
-            {label && (
+            {leftLabel && rightLabel ? (
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="text-red-400 bg-red-400/10 px-2 py-0.5 rounded">{leftLabel}</span>
+                <span className="text-gray-500">vs</span>
+                <span className="text-green-400 bg-green-400/10 px-2 py-0.5 rounded">{rightLabel}</span>
+              </div>
+            ) : label ? (
               <span className="text-[11px] text-gray-400 bg-gray-700 px-2 py-0.5 rounded">{label}</span>
-            )}
+            ) : null}
             <span className="text-[11px] text-gray-500">
               {changedFiles.length} file{changedFiles.length !== 1 ? "s" : ""} changed
             </span>

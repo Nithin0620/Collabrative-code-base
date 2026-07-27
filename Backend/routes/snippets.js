@@ -1,16 +1,16 @@
 import { Router } from "express"
 import { authenticateToken } from "../middleware/auth.js"
+import Snippet from "../models/Snippet.js"
 
 const router = Router()
 
-const snippets = new Map()
-
 router.get("/", authenticateToken, async (req, res) => {
   try {
-    const userSnippets = Array.from(snippets.values())
-      .filter((s) => s.userId === req.user._id.toString())
-      .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
-    res.json({ snippets: userSnippets })
+    const snippets = await Snippet.find({ userId: req.user._id })
+      .sort({ updatedAt: -1 })
+      .select("-__v")
+      .lean()
+    res.json({ snippets })
   } catch (error) {
     res.status(500).json({ message: "Failed to load snippets" })
   }
@@ -23,19 +23,15 @@ router.post("/", authenticateToken, async (req, res) => {
       return res.status(400).json({ message: "title and code are required" })
     }
 
-    const id = "snippet_" + Math.random().toString(36).slice(2, 10)
-    const snippet = {
-      _id: id,
-      userId: req.user._id.toString(),
+    const snippet = await Snippet.create({
+      userId: req.user._id,
       title,
       code,
       language: language || "plaintext",
       tags: tags || [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }
-    snippets.set(id, snippet)
-    res.json({ snippet })
+    })
+
+    res.json({ snippet: snippet.toObject() })
   } catch (error) {
     res.status(500).json({ message: "Failed to create snippet" })
   }
@@ -43,17 +39,22 @@ router.post("/", authenticateToken, async (req, res) => {
 
 router.put("/:id", authenticateToken, async (req, res) => {
   try {
-    const snippet = snippets.get(req.params.id)
-    if (!snippet || snippet.userId !== req.user._id.toString()) {
+    const { title, code, language, tags } = req.body
+    const update = {}
+    if (title !== undefined) update.title = title
+    if (code !== undefined) update.code = code
+    if (language !== undefined) update.language = language
+    if (tags !== undefined) update.tags = tags
+
+    const snippet = await Snippet.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      update,
+      { new: true }
+    ).select("-__v").lean()
+
+    if (!snippet) {
       return res.status(404).json({ message: "Snippet not found" })
     }
-
-    const { title, code, language, tags } = req.body
-    if (title !== undefined) snippet.title = title
-    if (code !== undefined) snippet.code = code
-    if (language !== undefined) snippet.language = language
-    if (tags !== undefined) snippet.tags = tags
-    snippet.updatedAt = new Date().toISOString()
 
     res.json({ snippet })
   } catch (error) {
@@ -63,11 +64,15 @@ router.put("/:id", authenticateToken, async (req, res) => {
 
 router.delete("/:id", authenticateToken, async (req, res) => {
   try {
-    const snippet = snippets.get(req.params.id)
-    if (!snippet || snippet.userId !== req.user._id.toString()) {
+    const snippet = await Snippet.findOneAndDelete({
+      _id: req.params.id,
+      userId: req.user._id,
+    })
+
+    if (!snippet) {
       return res.status(404).json({ message: "Snippet not found" })
     }
-    snippets.delete(req.params.id)
+
     res.json({ success: true })
   } catch (error) {
     res.status(500).json({ message: "Failed to delete snippet" })

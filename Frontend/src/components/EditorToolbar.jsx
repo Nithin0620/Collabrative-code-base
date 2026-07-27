@@ -18,6 +18,7 @@ export default function EditorToolbar({
   isSaving,
   onRun,
   onSnippets,
+  onTestCases,
   onDownloadFile,
   onDownloadProject,
 }) {
@@ -122,6 +123,13 @@ export default function EditorToolbar({
         >
           Snippets
         </button>
+        <button
+          onClick={onTestCases}
+          className="px-2.5 py-1 rounded bg-gray-800 border border-gray-700 text-gray-300 text-xs hover:bg-gray-700 hover:text-white transition-colors cursor-pointer"
+          title="Custom Test Cases"
+        >
+          Tests
+        </button>
 
         <div className="w-px h-4 bg-gray-700" />
 
@@ -134,19 +142,21 @@ export default function EditorToolbar({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
           </button>
-          <div className="absolute right-0 top-full mt-1 hidden group-hover:block z-50 bg-gray-800 border border-gray-700 rounded shadow-lg min-w-[120px]">
-            <button
-              onClick={onDownloadFile}
-              className="w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors cursor-pointer"
-            >
-              Current File
-            </button>
-            <button
-              onClick={onDownloadProject}
-              className="w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors border-t border-gray-700 cursor-pointer"
-            >
-              Project (.zip)
-            </button>
+          <div className="absolute right-0 top-full pt-1 z-50 hidden group-hover:block">
+            <div className="bg-gray-800 border border-gray-700 rounded shadow-lg min-w-[120px]">
+              <button
+                onClick={onDownloadFile}
+                className="w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors cursor-pointer"
+              >
+                Current File
+              </button>
+              <button
+                onClick={onDownloadProject}
+                className="w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors border-t border-gray-700 cursor-pointer"
+              >
+                Project (.zip)
+              </button>
+            </div>
           </div>
         </div>
 

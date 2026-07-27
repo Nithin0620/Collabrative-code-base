@@ -1,7 +1,31 @@
 import { useRef, useEffect } from "react"
 
-function GalleryTile({ stream, label, color, isLocal, isPinned, onPin }) {
+function MicWave() {
+  return (
+    <div className="absolute bottom-2 left-2 flex items-end gap-0.5 px-1.5 py-1 rounded bg-black/60 backdrop-blur-sm">
+      {[0, 1, 2, 3, 4].map((i) => (
+        <div
+          key={i}
+          className="w-0.5 bg-green-400 rounded-full"
+          style={{
+            height: "6px",
+            animation: `micWave 0.8s ease-in-out ${i * 0.1}s infinite alternate`,
+          }}
+        />
+      ))}
+      <style>{`
+        @keyframes micWave {
+          0% { height: 2px; }
+          100% { height: 12px; }
+        }
+      `}</style>
+    </div>
+  )
+}
+
+function GalleryTile({ stream, user: u, isLocal, isPinned, onPin }) {
   const videoRef = useRef(null)
+  const hasVideo = !!stream
 
   useEffect(() => {
     if (videoRef.current && stream) {
@@ -11,20 +35,39 @@ function GalleryTile({ stream, label, color, isLocal, isPinned, onPin }) {
 
   return (
     <div className={`relative rounded-lg overflow-hidden border-2 transition-colors ${isPinned ? "border-amber-500" : "border-gray-700"} bg-gray-800`}>
-      <div className="aspect-video bg-gray-900 relative">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted={isLocal}
-          className="w-full h-full object-cover"
-        />
+      <div className="aspect-video bg-gray-900 relative flex items-center justify-center">
+        {hasVideo ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={isLocal}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-2">
+            {u?.avatar ? (
+              <img src={u.avatar} alt={u.username} className="w-16 h-16 rounded-full object-cover border-2" style={{ borderColor: u?.color || "#60a5fa" }} />
+            ) : (
+              <div
+                className="w-16 h-16 rounded-full flex items-center justify-center text-2xl font-bold text-white"
+                style={{ backgroundColor: u?.color || "#60a5fa" }}
+              >
+                {(u?.username || "?").charAt(0).toUpperCase()}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-sm">
-          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color || "#22c55e" }} />
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: u?.color || "#22c55e" }} />
           <span className="text-[11px] text-white font-medium">
-            {label}{isLocal ? " (you)" : ""}
+            {u?.username || "Unknown"}{isLocal ? " (you)" : ""}
           </span>
         </div>
+
+        {u?.audioEnabled && <MicWave />}
+
         <button
           onClick={onPin}
           className={`absolute bottom-2 right-2 px-2 py-1 rounded text-[10px] font-semibold transition-colors cursor-pointer ${
@@ -41,7 +84,8 @@ function GalleryTile({ stream, label, color, isLocal, isPinned, onPin }) {
 }
 
 export default function VideoGallery({ remoteStreams, localStream, users, user, pinnedUser, onPin, onClose }) {
-  const allPeers = Object.entries(remoteStreams)
+  const allRemoteUsers = users.filter((u) => u.username !== user?.username)
+  const totalUsers = allRemoteUsers.length + 1
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
@@ -51,9 +95,9 @@ export default function VideoGallery({ remoteStreams, localStream, users, user, 
       >
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700">
           <div className="flex items-center gap-2">
-            <h3 className="text-sm font-bold text-white">Video Gallery</h3>
+            <h3 className="text-sm font-bold text-white">Gallery</h3>
             <span className="text-[10px] text-gray-400 bg-gray-800 px-2 py-0.5 rounded-full">
-              {allPeers.length + (localStream ? 1 : 0)} stream{(allPeers.length + (localStream ? 1 : 0)) !== 1 ? "s" : ""}
+              {totalUsers} user{totalUsers !== 1 ? "s" : ""}
             </span>
           </div>
           <button
@@ -67,45 +111,37 @@ export default function VideoGallery({ remoteStreams, localStream, users, user, 
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
-          {allPeers.length === 0 && !localStream ? (
-            <div className="flex items-center justify-center h-40 text-gray-500 text-sm">
-              No video streams active
-            </div>
-          ) : (
-            <div className={`grid gap-3 ${
-              allPeers.length <= 1
-                ? "grid-cols-1 max-w-md mx-auto"
-                : allPeers.length <= 4
-                  ? "grid-cols-2"
-                  : "grid-cols-3"
-            }`}>
-              {localStream && (
+          <div className={`grid gap-3 ${
+            totalUsers <= 1
+              ? "grid-cols-1 max-w-md mx-auto"
+              : totalUsers <= 4
+                ? "grid-cols-2"
+                : "grid-cols-3"
+          }`}>
+            <GalleryTile
+              stream={localStream}
+              user={user}
+              isLocal={true}
+              isPinned={false}
+              onPin={() => {}}
+            />
+            {allRemoteUsers.map((u) => {
+              const streamEntry = Object.entries(remoteStreams).find(([peerId]) => {
+                return true
+              })
+              const peerStream = streamEntry ? streamEntry[1] : null
+              return (
                 <GalleryTile
-                  stream={localStream}
-                  label={user?.username || "You"}
-                  color={user?.color || "#22c55e"}
-                  isLocal={true}
-                  isPinned={false}
-                  onPin={() => {}}
+                  key={u.username}
+                  stream={peerStream}
+                  user={u}
+                  isLocal={false}
+                  isPinned={pinnedUser === u.username}
+                  onPin={() => onPin(pinnedUser === u.username ? null : u.username)}
                 />
-              )}
-              {allPeers.map(([peerId, stream]) => {
-                const peerUser = users.find((u) => u.username !== user?.username && remoteStreams[peerId]) || {}
-                const peerName = peerUser.username || peerId.slice(0, 8)
-                return (
-                  <GalleryTile
-                    key={peerId}
-                    stream={stream}
-                    label={peerName}
-                    color={peerUser.color || "#60a5fa"}
-                    isLocal={false}
-                    isPinned={pinnedUser === peerId}
-                    onPin={() => onPin(pinnedUser === peerId ? null : peerId)}
-                  />
-                )
-              })}
-            </div>
-          )}
+              )
+            })}
+          </div>
         </div>
       </div>
     </div>
