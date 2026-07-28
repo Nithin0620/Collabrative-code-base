@@ -21,6 +21,8 @@ export default function EditorToolbar({
   onTestCases,
   onDownloadFile,
   onDownloadProject,
+  readOnly,
+  onOpenShare,
 }) {
   const lang = filename ? getFileInfo(filename) : null
 
@@ -37,6 +39,12 @@ export default function EditorToolbar({
             </span>
             <span className="font-mono text-xs">{filename}</span>
           </div>
+        )}
+
+        {readOnly && (
+          <span className="px-2 py-0.5 rounded bg-gray-800 border border-gray-700 text-amber-400 text-[10px] font-semibold">
+            Read Only
+          </span>
         )}
 
         <div className="w-px h-4 bg-gray-700" />
@@ -82,19 +90,23 @@ export default function EditorToolbar({
             {isSaving ? "Saving..." : `Saved ${lastSaved}`}
           </span>
         )}
-        <button
-          onClick={onSave}
-          disabled={isSaving}
-          className="px-2.5 py-1 rounded bg-gray-800 border border-gray-700 text-gray-300 text-xs hover:bg-gray-700 hover:text-white disabled:opacity-50 transition-colors cursor-pointer"
-        >
-          Save
-        </button>
-        <button
-          onClick={onSnapshot}
-          className="px-2.5 py-1 rounded bg-amber-500 text-gray-950 text-xs font-semibold hover:bg-amber-400 transition-colors cursor-pointer"
-        >
-          Snapshot
-        </button>
+        {!readOnly && (
+          <>
+            <button
+              onClick={onSave}
+              disabled={isSaving}
+              className="px-2.5 py-1 rounded bg-gray-800 border border-gray-700 text-gray-300 text-xs hover:bg-gray-700 hover:text-white disabled:opacity-50 transition-colors cursor-pointer"
+            >
+              Save
+            </button>
+            <button
+              onClick={onSnapshot}
+              className="px-2.5 py-1 rounded bg-amber-500 text-gray-950 text-xs font-semibold hover:bg-amber-400 transition-colors cursor-pointer"
+            >
+              Snapshot
+            </button>
+          </>
+        )}
         <button
           onClick={onShowHistory}
           className="px-2.5 py-1 rounded bg-gray-800 border border-gray-700 text-gray-300 text-xs hover:bg-gray-700 hover:text-white transition-colors cursor-pointer"
@@ -104,18 +116,20 @@ export default function EditorToolbar({
 
         <div className="w-px h-4 bg-gray-700" />
 
-        <button
-          onClick={onRun}
-          className="px-2.5 py-1 rounded bg-green-600 text-white text-xs font-semibold hover:bg-green-500 transition-colors cursor-pointer"
-          title="Run code (Ctrl+Enter)"
-        >
-          <span className="flex items-center gap-1">
-            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-            Run
-          </span>
-        </button>
+        {!readOnly && (
+          <button
+            onClick={onRun}
+            className="px-2.5 py-1 rounded bg-green-600 text-white text-xs font-semibold hover:bg-green-500 transition-colors cursor-pointer"
+            title="Run code (Ctrl+Enter)"
+          >
+            <span className="flex items-center gap-1">
+              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+              Run
+            </span>
+          </button>
+        )}
         <button
           onClick={onSnippets}
           className="px-2.5 py-1 rounded bg-gray-800 border border-gray-700 text-gray-300 text-xs hover:bg-gray-700 hover:text-white transition-colors cursor-pointer"

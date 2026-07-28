@@ -7,6 +7,7 @@ import { Server } from "socket.io"
 import { YSocketIO } from "y-socket.io/dist/server"
 import jwt from "jsonwebtoken"
 import passport from "passport"
+import { AccessToken } from "livekit-server-sdk"
 import connectDB from "./config/db.js"
 import { configurePassport } from "./config/passport.js"
 import authRoutes from "./routes/auth.js"
@@ -75,33 +76,122 @@ app.use("/api/execute", executeRoutes)
 app.use("/api/snippets", snippetRoutes)
 app.use("/api/testcases", testCaseRoutes)
 
+app.post("/api/livekit/token", async (req, res) => {
+  try {
+    const { roomName, identity, name } = req.body
+    if (!roomName || !identity) {
+      return res.status(400).json({ error: "roomName and identity are required" })
+    }
+    const apiKey = process.env.LIVEKIT_API_KEY || "devkey"
+    const apiSecret = process.env.LIVEKIT_API_SECRET || "secret"
+    const wsUrl = process.env.LIVEKIT_WS_URL || "ws://localhost:7880"
+
+    const at = new AccessToken(apiKey, apiSecret, {
+      identity,
+      name: name || "User",
+    })
+    at.addGrant({
+      room: roomName,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+    })
+    const token = await at.toJwt()
+    res.json({ token, url: wsUrl })
+  } catch (err) {
+    console.error("LiveKit token error:", err)
+    res.status(500).json({ error: "Failed to generate token" })
+  }
+})
+
 const roomMembers = new Map()
 
 io.on("connection", (socket) => {
   socket.on("chat-message", (data) => {
     socket.to(data.roomId).emit("chat-message", data)
   })
+
+  // WebRTC Signaling
+  socket.on("webrtc-offer", (data) => {
+    if (data.to) {
+      socket.to(data.to).emit("webrtc-offer", { offer: data.offer, from: socket.id })
+    }
+  })
+
+  socket.on("webrtc-answer", (data) => {
+    if (data.to) {
+      socket.to(data.to).emit("webrtc-answer", { answer: data.answer, from: socket.id })
+    }
+  })
+
+  socket.on("webrtc-candidate", (data) => {
+    if (data.to) {
+      socket.to(data.to).emit("webrtc-candidate", { candidate: data.candidate, from: socket.id })
+    }
+  })
+
+  socket.on("webrtc-end", (data) => {
+    if (data.to) {
+      socket.to(data.to).emit("webrtc-end", { from: socket.id })
+    }
+  })
+
+  // Real-Time Member Management
+  socket.on("member-action", (data) => {
+    // data: { roomId, targetUserId, action: "kick" | "ban" | "role-update" | "settings-update" }
+    if (data.roomId) {
+      io.to(data.roomId).emit("member-action-event", data)
+    }
+  })
+
   socket.on("join-room", async (roomId) => {
-    if (socket.user) {
-      try {
-        const project = await Project.findOne({ roomId })
-        if (project) {
-          const userId = socket.user._id.toString()
-          if (project.bannedUsers?.includes(userId)) {
-            socket.emit("room-error", { message: "You are banned from this room" })
-            return
-          }
-          const role = getUserProjectRole(project, userId)
-          if (!role && project.settings?.inviteOnly) {
-            socket.emit("room-error", { message: "This room is invite-only" })
-            return
-          }
-          socket.data.userRole = role || "editor"
+    if (!socket.user) {
+      socket.emit("room-error", { message: "Authentication required" })
+      return
+    }
+
+    try {
+      const project = await Project.findOne({ roomId })
+      if (project) {
+        const userId = socket.user._id.toString()
+        const isOwner = project.createdBy?.toString() === userId
+
+        if (project.bannedUsers?.includes(userId)) {
+          socket.emit("room-error", { message: "You are banned from this room" })
+          return
         }
-      } catch (err) {
-        socket.data.userRole = "editor"
+
+        let isMember = false
+        if (project.members) {
+          if (typeof project.members.has === "function") isMember = project.members.has(userId)
+          if (!isMember && typeof project.members.entries === "function") {
+            for (const [k] of project.members.entries()) {
+              if (k.toString() === userId) { isMember = true; break }
+            }
+          }
+        }
+
+        if (project.settings?.inviteOnly && !isOwner && !isMember) {
+          socket.emit("room-error", { message: "This room is invite-only. You must be invited by the room owner to join.", requiresInvite: true })
+          return
+        }
+
+        if (project.settings?.password && !isOwner) {
+          const cookieHeader = socket.handshake.headers?.cookie || ""
+          if (!cookieHeader.includes(`pwd_${roomId}=verified`)) {
+            socket.emit("room-error", { message: "Password required to enter this room", requiresPassword: true })
+            return
+          }
+        }
+
+        let role = getUserProjectRole(project, userId)
+        if (project.settings?.readOnly && !isOwner) {
+          role = "viewer"
+        }
+        socket.data.userRole = role || "viewer"
       }
-    } else {
+    } catch (err) {
       socket.data.userRole = "viewer"
     }
 
@@ -121,33 +211,26 @@ io.on("connection", (socket) => {
 
   socket.on("get-room-members", (roomId, cb) => {
     const members = Array.from(roomMembers.get(roomId) || [])
-    cb({ members, selfId: socket.id })
+    if (typeof cb === "function") {
+      cb({ members, selfId: socket.id })
+    }
   })
 
   socket.on("webrtc-offer", (data) => {
     if (data.to) {
-      io.to(data.to).emit("webrtc-offer", {
-        offer: data.offer,
-        from: socket.id,
-      })
+      io.to(data.to).emit("webrtc-offer", { offer: data.offer, from: socket.id })
     }
   })
 
   socket.on("webrtc-answer", (data) => {
     if (data.to) {
-      io.to(data.to).emit("webrtc-answer", {
-        answer: data.answer,
-        from: socket.id,
-      })
+      io.to(data.to).emit("webrtc-answer", { answer: data.answer, from: socket.id })
     }
   })
 
   socket.on("webrtc-candidate", (data) => {
     if (data.to) {
-      io.to(data.to).emit("webrtc-candidate", {
-        candidate: data.candidate,
-        from: socket.id,
-      })
+      io.to(data.to).emit("webrtc-candidate", { candidate: data.candidate, from: socket.id })
     }
   })
 

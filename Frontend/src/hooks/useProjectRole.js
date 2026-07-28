@@ -8,11 +8,26 @@ export default function useProjectRole(roomId) {
   const [loading, setLoading] = useState(true)
   const [settings, setSettings] = useState({})
 
+  const [requiresPassword, setRequiresPassword] = useState(false)
+  const [requiresInvite, setRequiresInvite] = useState(false)
+
   const fetchProject = useCallback(async () => {
     if (!roomId) return
     try {
       const res = await fetch("/api/projects/" + roomId, { credentials: "include" })
       const data = await res.json()
+      if (data.requiresPassword) {
+        setRequiresPassword(true)
+        return
+      } else {
+        setRequiresPassword(false)
+      }
+      if (data.requiresInvite) {
+        setRequiresInvite(true)
+        return
+      } else {
+        setRequiresInvite(false)
+      }
       if (data.project) {
         setProject(data.project)
         setRole(data.project.userRole ?? null)
@@ -43,20 +58,27 @@ export default function useProjectRole(roomId) {
     fetchMembers()
   }, [fetchProject, fetchMembers])
 
-  const addMember = useCallback(async (username, memberRole) => {
-    const res = await fetch("/api/projects/" + roomId + "/members", {
+  const sendInvite = useCallback(async (emailOrUsername, memberRole) => {
+    const isEmail = emailOrUsername.includes("@")
+    const payload = isEmail
+      ? { email: emailOrUsername, role: memberRole }
+      : { username: emailOrUsername, role: memberRole }
+
+    const res = await fetch("/api/projects/" + roomId + "/invite", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ username, role: memberRole }),
+      body: JSON.stringify(payload),
     })
     if (res.ok) {
+      const data = await res.json()
       await fetchMembers()
-      return true
+      await fetchProject()
+      return data
     }
     const err = await res.json()
     return { error: err.message }
-  }, [roomId, fetchMembers])
+  }, [roomId, fetchMembers, fetchProject])
 
   const changeRole = useCallback(async (userId, newRole) => {
     const res = await fetch("/api/projects/" + roomId + "/members/" + userId + "/role", {
@@ -67,11 +89,12 @@ export default function useProjectRole(roomId) {
     })
     if (res.ok) {
       await fetchMembers()
+      await fetchProject()
       return true
     }
     const err = await res.json()
     return { error: err.message }
-  }, [roomId, fetchMembers])
+  }, [roomId, fetchMembers, fetchProject])
 
   const kickUser = useCallback(async (userId) => {
     const res = await fetch("/api/projects/" + roomId + "/kick/" + userId, {
@@ -80,11 +103,12 @@ export default function useProjectRole(roomId) {
     })
     if (res.ok) {
       await fetchMembers()
+      await fetchProject()
       return true
     }
     const err = await res.json()
     return { error: err.message }
-  }, [roomId, fetchMembers])
+  }, [roomId, fetchMembers, fetchProject])
 
   const banUser = useCallback(async (userId) => {
     const res = await fetch("/api/projects/" + roomId + "/ban/" + userId, {
@@ -93,11 +117,12 @@ export default function useProjectRole(roomId) {
     })
     if (res.ok) {
       await fetchMembers()
+      await fetchProject()
       return true
     }
     const err = await res.json()
     return { error: err.message }
-  }, [roomId, fetchMembers])
+  }, [roomId, fetchMembers, fetchProject])
 
   const unbanUser = useCallback(async (userId) => {
     const res = await fetch("/api/projects/" + roomId + "/unban/" + userId, {
@@ -106,11 +131,12 @@ export default function useProjectRole(roomId) {
     })
     if (res.ok) {
       await fetchMembers()
+      await fetchProject()
       return true
     }
     const err = await res.json()
     return { error: err.message }
-  }, [roomId, fetchMembers])
+  }, [roomId, fetchMembers, fetchProject])
 
   const updateSettings = useCallback(async (newSettings) => {
     const res = await fetch("/api/projects/" + roomId + "/settings", {
@@ -122,17 +148,22 @@ export default function useProjectRole(roomId) {
     if (res.ok) {
       const data = await res.json()
       setSettings(data.settings)
+      await fetchProject()
       return true
     }
     const err = await res.json()
     return { error: err.message }
-  }, [roomId])
+  }, [roomId, fetchProject])
+
+  const canEdit = role === "owner" || (role === "editor" && !settings?.readOnly)
 
   return {
     role, project, members, bannedUsers, loading, settings,
-    canEdit: role === "owner" || role === "editor",
+    canEdit,
+    requiresPassword,
+    requiresInvite,
     isOwner: role === "owner",
-    fetchProject, fetchMembers, addMember, changeRole,
+    fetchProject, fetchMembers, addMember: sendInvite, sendInvite, changeRole,
     kickUser, banUser, unbanUser, updateSettings,
   }
 }

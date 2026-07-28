@@ -27,6 +27,9 @@ function defaultFiles() {
   }]
 }
 
+import jwt from "jsonwebtoken"
+import { sendInviteEmail } from "../utils/mailer.js"
+
 router.get("/:roomId", authenticateToken, async (req, res) => {
   try {
     let project = await Project.findOne({ roomId: req.params.roomId })
@@ -55,6 +58,42 @@ router.get("/:roomId", authenticateToken, async (req, res) => {
 
     const creatorId = project.createdBy?.toString()
     const userId = req.user._id.toString()
+    const isOwner = creatorId === userId
+    let isMember = false
+    if (project.members) {
+      const uStr = userId.toString()
+      if (typeof project.members.has === "function") {
+        isMember = project.members.has(uStr)
+      }
+      if (!isMember && typeof project.members.entries === "function") {
+        for (const [k] of project.members.entries()) {
+          if (k.toString() === uStr) {
+            isMember = true
+            break
+          }
+        }
+      } else if (!isMember && typeof project.members === "object") {
+        isMember = !!project.members[uStr]
+      }
+    }
+
+    if (project.bannedUsers?.includes(userId)) {
+      return res.status(403).json({ message: "You are banned from this room" })
+    }
+
+    // Check Invite Only requirement
+    if (project.settings?.inviteOnly && !isOwner && !isMember) {
+      return res.status(403).json({ requiresInvite: true, message: "This room is invite-only. Please request an invitation from the room owner." })
+    }
+
+    // Check Password requirement
+    if (project.settings?.password && !isOwner) {
+      const pwdCookie = req.cookies?.["pwd_" + req.params.roomId]
+      if (pwdCookie !== "verified") {
+        return res.status(403).json({ requiresPassword: true, message: "Password required to enter this room" })
+      }
+    }
+
     if (creatorId && project.members && !project.members.has(creatorId)) {
       project.members.set(creatorId, { role: "owner", joinedAt: project.createdAt || new Date() })
       await project.save()
@@ -66,20 +105,19 @@ router.get("/:roomId", authenticateToken, async (req, res) => {
       projectObj.settings.password = undefined
     }
 
-    const role = getUserProjectRole(project, req.user._id.toString())
+    let role = getUserProjectRole(project, userId)
+    if (project.settings?.readOnly && !isOwner) {
+      role = "viewer"
+    }
     projectObj.userRole = role
 
     const membersObj = {}
     if (project.members) {
-      for (const [userId, val] of project.members.entries()) {
-        membersObj[userId] = val
+      for (const [mId, val] of project.members.entries()) {
+        membersObj[mId] = val
       }
     }
     projectObj.members = membersObj
-
-    if (project.bannedUsers?.includes(req.user._id.toString())) {
-      return res.status(403).json({ message: "You are banned from this room" })
-    }
 
     res.json({ project: projectObj })
   } catch (error) {
@@ -231,6 +269,7 @@ router.post("/:roomId/members", authenticateToken, requireProjectRole("owner"), 
 
     const validRole = ["editor", "viewer"].includes(role) ? role : "editor"
     project.members.set(targetId, { role: validRole, joinedAt: new Date() })
+    project.markModified("members")
     await project.save()
 
     res.json({ success: true, member: { _id: targetId, username: targetUser.username, avatar: targetUser.avatar, color: targetUser.color, role: validRole } })
@@ -253,12 +292,9 @@ router.patch("/:roomId/members/:userId/role", authenticateToken, requireProjectR
       return res.status(400).json({ message: "Cannot change your own role" })
     }
 
-    if (!project.members?.has(userId)) {
-      return res.status(404).json({ message: "Member not found" })
-    }
-
-    const current = project.members.get(userId)
+    const current = project.members?.get(userId) || {}
     project.members.set(userId, { ...current, role })
+    project.markModified("members")
     await project.save()
 
     res.json({ success: true })
@@ -277,6 +313,7 @@ router.delete("/:roomId/members/:userId", authenticateToken, requireProjectRole(
     }
 
     project.members?.delete(userId)
+    project.markModified("members")
     await project.save()
 
     res.json({ success: true })
@@ -295,6 +332,7 @@ router.post("/:roomId/kick/:userId", authenticateToken, requireProjectRole("owne
     }
 
     project.members?.delete(userId)
+    project.markModified("members")
     await project.save()
 
     res.json({ success: true, kicked: userId })
@@ -318,6 +356,8 @@ router.post("/:roomId/ban/:userId", authenticateToken, requireProjectRole("owner
     }
 
     project.members?.delete(userId)
+    project.markModified("members")
+    project.markModified("bannedUsers")
     await project.save()
 
     res.json({ success: true, banned: userId })
@@ -332,6 +372,7 @@ router.post("/:roomId/unban/:userId", authenticateToken, requireProjectRole("own
     const project = req.project
 
     project.bannedUsers = (project.bannedUsers || []).filter((id) => id !== userId)
+    project.markModified("bannedUsers")
     await project.save()
 
     res.json({ success: true, unbanned: userId })
@@ -351,6 +392,7 @@ router.patch("/:roomId/settings", authenticateToken, requireProjectRole("owner")
       project.settings.password = password ? await bcrypt.hash(password, 10) : ""
     }
 
+    project.markModified("settings")
     await project.save()
 
     const settingsObj = { ...project.settings.toObject() }
@@ -385,14 +427,120 @@ router.post("/:roomId/verify-password", authenticateToken, async (req, res) => {
       return res.status(403).json({ message: "You are banned from this room" })
     }
 
+    const assignedRole = project.settings?.readOnly ? "viewer" : "editor"
     if (!project.members?.has(userId) && project.createdBy?.toString() !== userId) {
-      project.members.set(userId, { role: "editor", joinedAt: new Date() })
+      project.members.set(userId, { role: assignedRole, joinedAt: new Date() })
       await project.save()
     }
+
+    res.cookie("pwd_" + req.params.roomId, "verified", {
+      httpOnly: true,
+      sameSite: "lax",
+      maxAge: 24 * 60 * 60 * 1000,
+    })
 
     res.json({ success: true })
   } catch (error) {
     res.status(500).json({ message: "Failed to verify password" })
+  }
+})
+
+router.post("/:roomId/invite", authenticateToken, requireProjectRole("owner"), async (req, res) => {
+  try {
+    const { email, username, role } = req.body
+    const project = req.project
+
+    if (!email && !username) {
+      return res.status(400).json({ message: "Email or username is required" })
+    }
+
+    let targetEmail = email
+    let targetUser = null
+
+    if (username) {
+      targetUser = await User.findOne({ username })
+      if (targetUser && targetUser.email) {
+        targetEmail = targetUser.email
+      }
+    } else if (email) {
+      targetUser = await User.findOne({ email })
+    }
+
+    const validRole = ["editor", "viewer"].includes(role) ? role : "editor"
+
+    if (targetUser) {
+      const targetId = targetUser._id.toString()
+      if (project.bannedUsers?.includes(targetId)) {
+        return res.status(400).json({ message: "User is banned from this room" })
+      }
+      project.members.set(targetId, { role: validRole, joinedAt: new Date() })
+      project.markModified("members")
+      await project.save()
+    }
+
+    let emailResult = { success: false }
+    if (targetEmail) {
+      const inviteToken = jwt.sign(
+        { roomId: req.params.roomId, email: targetEmail, role: validRole },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      )
+      emailResult = await sendInviteEmail({
+        toEmail: targetEmail,
+        inviterName: req.user.username,
+        roomName: req.params.roomId,
+        roomId: req.params.roomId,
+        inviteToken,
+        role: validRole,
+      })
+    }
+
+    res.json({
+      success: true,
+      emailSent: emailResult.success,
+      memberAdded: !!targetUser,
+      message: emailResult.success
+        ? `Invitation sent to ${targetEmail}`
+        : targetUser
+          ? `User ${targetUser.username} added to room`
+          : "Member processed",
+    })
+  } catch (error) {
+    console.error("Invite error:", error)
+    res.status(500).json({ message: "Failed to send invitation" })
+  }
+})
+
+router.post("/:roomId/accept-invite", authenticateToken, async (req, res) => {
+  try {
+    const { inviteToken } = req.body
+    if (!inviteToken) {
+      return res.status(400).json({ message: "Invite token is required" })
+    }
+
+    const decoded = jwt.verify(inviteToken, process.env.JWT_SECRET)
+    if (decoded.roomId !== req.params.roomId) {
+      return res.status(400).json({ message: "Invalid invite token for this room" })
+    }
+
+    const project = await Project.findOne({ roomId: req.params.roomId })
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" })
+    }
+
+    const userId = req.user._id.toString()
+    if (project.bannedUsers?.includes(userId)) {
+      return res.status(403).json({ message: "You are banned from this room" })
+    }
+
+    const role = decoded.role || "editor"
+    project.members.set(userId, { role, joinedAt: new Date() })
+    project.markModified("members")
+    await project.save()
+
+    res.json({ success: true, role })
+  } catch (error) {
+    res.status(400).json({ message: "Invalid or expired invitation token" })
   }
 })
 
@@ -409,27 +557,40 @@ router.post("/:roomId/join", authenticateToken, async (req, res) => {
       return res.status(403).json({ message: "You are banned from this room" })
     }
 
-    if (project.createdBy?.toString() === userId) {
+    const isOwner = project.createdBy?.toString() === userId
+    if (isOwner) {
       return res.json({ success: true, role: "owner" })
     }
 
-    const existingMember = project.members?.get(userId)
-    if (existingMember) {
-      return res.json({ success: true, role: existingMember.role })
-    }
-
-    if (project.settings?.inviteOnly) {
-      return res.json({ success: false, requiresApproval: true, message: "This room is invite-only" })
-    }
-
     if (project.settings?.password) {
-      return res.json({ success: false, requiresPassword: true, message: "This room requires a password" })
+      const pwdCookie = req.cookies?.["pwd_" + req.params.roomId]
+      if (pwdCookie !== "verified") {
+        return res.status(403).json({ success: false, requiresPassword: true, message: "This room requires a password" })
+      }
     }
 
-    project.members.set(userId, { role: "editor", joinedAt: new Date() })
+    const existingMember = project.members?.get(userId)
+
+    if (project.settings?.inviteOnly && !isOwner && !existingMember) {
+      return res.status(403).json({
+        success: false,
+        requiresInvite: true,
+        requiresApproval: true,
+        message: "This room is invite-only. You must be invited by the room owner to join.",
+      })
+    }
+
+    if (existingMember) {
+      const role = project.settings?.readOnly ? "viewer" : existingMember.role
+      return res.json({ success: true, role })
+    }
+
+    const assignedRole = project.settings?.readOnly ? "viewer" : "editor"
+    project.members.set(userId, { role: assignedRole, joinedAt: new Date() })
+    project.markModified("members")
     await project.save()
 
-    res.json({ success: true, role: "editor" })
+    res.json({ success: true, role: assignedRole })
   } catch (error) {
     res.status(500).json({ message: "Failed to join room" })
   }

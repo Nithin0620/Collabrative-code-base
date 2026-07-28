@@ -40,7 +40,7 @@ function ConfirmModal({ message, onConfirm, onCancel }) {
   )
 }
 
-function TreeItem({ item, depth, selectedFileId, activeFolderId, draggedId, dragOverId, onSelect, onFolderSelect, onRename, onConfirmDelete, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, children, renamingId, setRenamingId }) {
+function TreeItem({ item, depth, selectedFileId, activeFolderId, draggedId, dragOverId, onSelect, onFolderSelect, onRename, onConfirmDelete, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, children, renamingId, setRenamingId, readOnly }) {
   const isFolder = item.type === "folder"
   const [expanded, setExpanded] = useState(true)
   const [editName, setEditName] = useState(item.name)
@@ -82,12 +82,12 @@ function TreeItem({ item, depth, selectedFileId, activeFolderId, draggedId, drag
                   : "text-gray-300 hover:bg-gray-800/50"
         }`}
         style={{ paddingLeft: `${Math.min(depth * 10 + 6, 40)}px` }}
-        draggable={!isRenaming}
+        draggable={!isRenaming && !readOnly}
         onDragStart={(e) => onDragStart(e, item.id)}
         onDragEnd={onDragEnd}
-        onDragOver={isFolder ? (e) => onDragOver(e, item.id) : undefined}
-        onDragLeave={isFolder ? onDragLeave : undefined}
-        onDrop={isFolder ? (e) => onDrop(e, item.id) : undefined}
+        onDragOver={isFolder && !readOnly ? (e) => onDragOver(e, item.id) : undefined}
+        onDragLeave={isFolder && !readOnly ? onDragLeave : undefined}
+        onDrop={isFolder && !readOnly ? (e) => onDrop(e, item.id) : undefined}
         onClick={() => {
           if (isFolder) {
             setExpanded(!expanded)
@@ -115,7 +115,7 @@ function TreeItem({ item, depth, selectedFileId, activeFolderId, draggedId, drag
           <FileIcon filename={item.name} />
         )}
 
-        {isRenaming ? (
+        {isRenaming && !readOnly ? (
           <input
             ref={inputRef}
             value={editName}
@@ -132,36 +132,38 @@ function TreeItem({ item, depth, selectedFileId, activeFolderId, draggedId, drag
           <span className="flex-1 min-w-0 truncate text-sm">{item.name}</span>
         )}
 
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-auto">
-          <button
-            onClick={(e) => { e.stopPropagation(); setRenamingId(item.id); setEditName(item.name) }}
-            className="p-0.5 rounded hover:bg-gray-700 text-gray-500 hover:text-gray-300 cursor-pointer"
-            title="Rename"
-          >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onConfirmDelete({ id: item.id, name: item.name, type: item.type })
-            }}
-            className="p-0.5 rounded hover:bg-red-900/30 text-gray-500 hover:text-red-400 cursor-pointer"
-            title="Delete"
-          >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-auto">
+            <button
+              onClick={(e) => { e.stopPropagation(); setRenamingId(item.id); setEditName(item.name) }}
+              className="p-0.5 rounded hover:bg-gray-700 text-gray-500 hover:text-gray-300 cursor-pointer"
+              title="Rename"
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onConfirmDelete({ id: item.id, name: item.name, type: item.type })
+              }}
+              className="p-0.5 rounded hover:bg-red-900/30 text-gray-500 hover:text-red-400 cursor-pointer"
+              title="Delete"
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
       {isFolder && expanded && children}
     </div>
   )
 }
 
-function TreeRecursive({ items, depth, selectedFileId, activeFolderId, draggedId, dragOverId, onSelect, onFolderSelect, onRename, onConfirmDelete, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, renamingId, setRenamingId, childrenMap }) {
+function TreeRecursive({ items, depth, selectedFileId, activeFolderId, draggedId, dragOverId, onSelect, onFolderSelect, onRename, onConfirmDelete, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, renamingId, setRenamingId, childrenMap, readOnly }) {
   return items.map((item) => (
     <TreeItem
       key={item.id}
@@ -182,6 +184,7 @@ function TreeRecursive({ items, depth, selectedFileId, activeFolderId, draggedId
       onDrop={onDrop}
       renamingId={renamingId}
       setRenamingId={setRenamingId}
+      readOnly={readOnly}
     >
       {childrenMap[item.id] && (
         <TreeRecursive
@@ -203,6 +206,7 @@ function TreeRecursive({ items, depth, selectedFileId, activeFolderId, draggedId
           renamingId={renamingId}
           setRenamingId={setRenamingId}
           childrenMap={childrenMap}
+          readOnly={readOnly}
         />
       )}
     </TreeItem>
@@ -415,6 +419,7 @@ export default function FileExplorer({ fileTree, selectedFileId, onSelect, onCre
             renamingId={renamingId}
             setRenamingId={setRenamingId}
             childrenMap={childrenMap}
+            readOnly={readOnly}
           />
         )}
 

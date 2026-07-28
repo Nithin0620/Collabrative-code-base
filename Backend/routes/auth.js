@@ -34,6 +34,67 @@ function oauthError(err, req, res, next) {
   res.redirect(process.env.CLIENT_URL + "?error=" + message)
 }
 
+// Email & Password Register
+router.post("/register", async (req, res) => {
+  try {
+    const { username, email, password } = req.body
+
+    if (!username || !email || !password) {
+      return res.status(400).json({ message: "Username, email, and password are required" })
+    }
+
+    const existingUser = await User.findOne({
+      $or: [{ email: email.toLowerCase() }, { username }],
+    })
+    if (existingUser) {
+      return res.status(400).json({ message: "User with this email or username already exists" })
+    }
+
+    const user = await User.create({
+      username: username.trim(),
+      email: email.trim().toLowerCase(),
+      password,
+      isGuest: false,
+    })
+
+    const token = generateToken(user._id)
+    setTokenCookie(res, token)
+    res.json({ user: user.toSafeJSON(), token })
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Registration failed" })
+  }
+})
+
+// Email & Password Login
+router.post("/login", async (req, res) => {
+  try {
+    const { emailOrUsername, password } = req.body
+
+    if (!emailOrUsername || !password) {
+      return res.status(400).json({ message: "Email/Username and password are required" })
+    }
+
+    const user = await User.findOne({
+      $or: [{ email: emailOrUsername.toLowerCase() }, { username: emailOrUsername }],
+    }).select("+password")
+
+    if (!user) {
+      return res.status(401).json({ message: "Invalid credentials" })
+    }
+
+    const isValid = await user.comparePassword(password)
+    if (!isValid) {
+      return res.status(401).json({ message: "Invalid credentials" })
+    }
+
+    const token = generateToken(user._id)
+    setTokenCookie(res, token)
+    res.json({ user: user.toSafeJSON(), token })
+  } catch (error) {
+    res.status(500).json({ message: "Login failed" })
+  }
+})
+
 // Guest login
 router.post("/guest", async (req, res) => {
   try {

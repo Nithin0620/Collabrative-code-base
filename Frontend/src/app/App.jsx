@@ -6,8 +6,11 @@ import LoginPage from "../pages/LoginPage"
 import DashboardPage from "../pages/DashboardPage"
 import EditorPage from "../pages/EditorPage"
 
+import { useLocation, useSearchParams } from "react-router-dom"
+
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
+  const location = useLocation()
 
   if (loading) {
     return (
@@ -18,7 +21,8 @@ function ProtectedRoute({ children }) {
   }
 
   if (!user) {
-    return <Navigate to="/login" replace />
+    const redirectUrl = encodeURIComponent(location.pathname + location.search)
+    return <Navigate to={`/login?redirect=${redirectUrl}`} replace />
   }
 
   return children
@@ -26,6 +30,8 @@ function ProtectedRoute({ children }) {
 
 function PublicRoute({ children }) {
   const { user, loading } = useAuth()
+  const [searchParams] = useSearchParams()
+  const redirect = searchParams.get("redirect") || "/"
 
   if (loading) {
     return (
@@ -36,7 +42,7 @@ function PublicRoute({ children }) {
   }
 
   if (user) {
-    return <Navigate to="/" replace />
+    return <Navigate to={redirect} replace />
   }
 
   return children

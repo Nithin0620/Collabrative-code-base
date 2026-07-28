@@ -8,6 +8,7 @@ const ICE_SERVERS = {
 }
 
 export default function useWebRTC(socket, roomId, user) {
+  const [localStream, setLocalStream] = useState(null)
   const [remoteStreams, setRemoteStreams] = useState({})
   const [audioEnabled, setAudioEnabled] = useState(false)
   const [videoEnabled, setVideoEnabled] = useState(false)
@@ -65,13 +66,17 @@ export default function useWebRTC(socket, roomId, user) {
     }
 
     pc.ontrack = (event) => {
-      const stream = event.streams[0]
-      if (stream) {
-        setRemoteStreams((prev) => ({
-          ...prev,
-          [peerId]: stream,
-        }))
-      }
+      const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track])
+      setRemoteStreams((prev) => {
+        const existing = prev[peerId]
+        if (existing) {
+          if (!existing.getTracks().some((t) => t.id === event.track.id)) {
+            existing.addTrack(event.track)
+          }
+          return { ...prev, [peerId]: new MediaStream(existing.getTracks()) }
+        }
+        return { ...prev, [peerId]: stream }
+      })
     }
 
     pc.onicecandidate = (event) => {
@@ -304,8 +309,54 @@ export default function useWebRTC(socket, roomId, user) {
     }
   }, [audioEnabled, videoEnabled, socket, roomId, sendOffer])
 
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const audioContextRef = useRef(null)
+  const analyserRef = useRef(null)
+  const animFrameRef = useRef(null)
+
+  const stopAudioAnalysis = useCallback(() => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {})
+      audioContextRef.current = null
+    }
+    analyserRef.current = null
+    setIsSpeaking(false)
+  }, [])
+
+  const startAudioAnalysis = useCallback((stream) => {
+    stopAudioAnalysis()
+    try {
+      const audioTrack = stream.getAudioTracks()[0]
+      if (!audioTrack) return
+      const AudioCtx = window.AudioContext || window.webkitAudioContext
+      const ctx = new AudioCtx()
+      audioContextRef.current = ctx
+      const source = ctx.createMediaStreamSource(new MediaStream([audioTrack]))
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 256
+      source.connect(analyser)
+      analyserRef.current = analyser
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount)
+      const checkVolume = () => {
+        if (!analyserRef.current) return
+        analyserRef.current.getByteFrequencyData(dataArray)
+        let sum = 0
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i]
+        const average = sum / dataArray.length
+        setIsSpeaking(average > 15)
+        animFrameRef.current = requestAnimationFrame(checkVolume)
+      }
+      checkVolume()
+    } catch (err) {
+      console.warn("Audio analysis error:", err)
+    }
+  }, [stopAudioAnalysis])
+
   const toggleAudio = useCallback(async () => {
     if (audioEnabledRef.current) {
+      stopAudioAnalysis()
       if (localStreamRef.current) {
         localStreamRef.current.getAudioTracks().forEach((t) => {
           t.enabled = false
@@ -331,6 +382,7 @@ export default function useWebRTC(socket, roomId, user) {
 
       setAudioEnabled(false)
       audioEnabledRef.current = false
+      setLocalStream(localStreamRef.current)
     } else {
       let newTrack
       try {
@@ -349,6 +401,8 @@ export default function useWebRTC(socket, roomId, user) {
       }
 
       const stream = localStreamRef.current
+      startAudioAnalysis(stream)
+
       Object.values(peerConnectionsRef.current).forEach((pc) => {
         const sender = pc.getSenders().find((s) => s.track?.kind === "audio")
         if (sender) {
@@ -364,8 +418,9 @@ export default function useWebRTC(socket, roomId, user) {
 
       setAudioEnabled(true)
       audioEnabledRef.current = true
+      setLocalStream(localStreamRef.current)
     }
-  }, [])
+  }, [startAudioAnalysis, stopAudioAnalysis])
 
   const toggleVideo = useCallback(async () => {
     if (videoEnabledRef.current) {
@@ -394,6 +449,7 @@ export default function useWebRTC(socket, roomId, user) {
 
       setVideoEnabled(false)
       videoEnabledRef.current = false
+      setLocalStream(localStreamRef.current)
     } else {
       let newTrack
       try {
@@ -427,6 +483,7 @@ export default function useWebRTC(socket, roomId, user) {
 
       setVideoEnabled(true)
       videoEnabledRef.current = true
+      setLocalStream(localStreamRef.current)
     }
   }, [])
 
@@ -435,6 +492,7 @@ export default function useWebRTC(socket, roomId, user) {
   }, [])
 
   const cleanup = useCallback(() => {
+    stopAudioAnalysis()
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((t) => t.stop())
       localStreamRef.current = null
@@ -468,17 +526,18 @@ export default function useWebRTC(socket, roomId, user) {
     audioEnabledRef.current = false
     videoEnabledRef.current = false
     hasMediaRef.current = false
-  }, [socket])
+  }, [socket, stopAudioAnalysis])
 
   useEffect(() => {
     return cleanup
   }, [cleanup])
 
   return {
-    localStream: localStreamRef.current,
+    localStream,
     remoteStreams,
     audioEnabled,
     videoEnabled,
+    isSpeaking,
     handRaised,
     setHandRaised,
     toggleAudio,

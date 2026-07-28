@@ -12,13 +12,17 @@ export default function RoleManager({ roomId, members, bannedUsers, settings, is
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
 
+  const [successMessage, setSuccessMessage] = useState("")
+
   const handleAdd = async () => {
     if (!addUsername.trim()) return
     setError("")
+    setSuccessMessage("")
     const result = await onAddMember(addUsername.trim(), addRole)
     if (result?.error) {
       setError(result.error)
     } else {
+      setSuccessMessage(result?.message || (addUsername.includes("@") ? `Invite email sent to ${addUsername}` : `User ${addUsername} added`))
       setAddUsername("")
     }
   }
@@ -29,12 +33,16 @@ export default function RoleManager({ roomId, members, bannedUsers, settings, is
       return
     }
     setError("")
+    setSuccessMessage("")
     const update = { inviteOnly, readOnly }
-    if (password) update.password = password
+    if (password.trim() !== "") {
+      update.password = password.trim()
+    }
     const result = await onUpdateSettings(update)
     if (result?.error) {
       setError(result.error)
     } else {
+      setSuccessMessage("Settings updated successfully")
       setPassword("")
       setConfirmPassword("")
       setSettingsOpen(false)
@@ -57,17 +65,20 @@ export default function RoleManager({ roomId, members, bannedUsers, settings, is
           {error && (
             <div className="px-3 py-2 rounded bg-red-500/10 border border-red-500/30 text-red-400 text-xs">{error}</div>
           )}
+          {successMessage && (
+            <div className="px-3 py-2 rounded bg-green-500/10 border border-green-500/30 text-green-400 text-xs">{successMessage}</div>
+          )}
 
           {isOwner && (
             <div className="space-y-2">
-              <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Add Member</h4>
+              <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Invite Member (Email or Username)</h4>
               <div className="flex gap-2">
                 <input
                   type="text"
                   value={addUsername}
                   onChange={(e) => setAddUsername(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                  placeholder="Username..."
+                  placeholder="user@example.com or Username..."
                   className="flex-1 px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-xs text-white placeholder-gray-500 focus:outline-none focus:border-amber-500"
                 />
                 <select
@@ -78,7 +89,7 @@ export default function RoleManager({ roomId, members, bannedUsers, settings, is
                   <option value="editor">Editor</option>
                   <option value="viewer">Viewer</option>
                 </select>
-                <button onClick={handleAdd} className="px-3 py-1.5 bg-amber-500 text-gray-950 rounded text-xs font-semibold hover:bg-amber-400 transition-colors cursor-pointer">Add</button>
+                <button onClick={handleAdd} className="px-3 py-1.5 bg-amber-500 text-gray-950 rounded text-xs font-semibold hover:bg-amber-400 transition-colors cursor-pointer">Send Invite</button>
               </div>
             </div>
           )}

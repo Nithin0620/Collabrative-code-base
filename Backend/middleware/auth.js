@@ -27,11 +27,38 @@ export const authenticateToken = async (req, res, next) => {
 const ROLE_HIERARCHY = { owner: 3, editor: 2, viewer: 1 }
 
 export function getUserProjectRole(project, userId) {
-  if (!project) return null
-  const member = project.members?.get(userId)
-  if (member) return member.role
-  if (project.createdBy?.toString() === userId) return "owner"
-  return null
+  if (!project || !userId) return null
+  const uStr = userId.toString()
+  const isOwner = project.createdBy?.toString() === uStr
+  if (isOwner) return "owner"
+
+  // Room readOnly setting forces all non-owners to be viewers
+  if (project.settings?.readOnly) {
+    return "viewer"
+  }
+
+  let member = null
+  if (project.members) {
+    if (typeof project.members.get === "function") {
+      member = project.members.get(uStr)
+    }
+    if (!member && typeof project.members.entries === "function") {
+      for (const [k, v] of project.members.entries()) {
+        if (k.toString() === uStr) {
+          member = v
+          break
+        }
+      }
+    } else if (!member && typeof project.members === "object") {
+      member = project.members[uStr]
+    }
+  }
+
+  if (member && member.role) {
+    return member.role
+  }
+
+  return "editor"
 }
 
 export function hasMinimumRole(userRole, requiredRole) {

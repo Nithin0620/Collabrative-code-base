@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react"
 
-export default function VideoWindow({ stream, label, color, isLocal, onClose, muted }) {
+export default function VideoWindow({ stream, trackRef, label, color, isLocal, onClose, muted }) {
   const videoRef = useRef(null)
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const [size, setSize] = useState({ w: 220, h: 165 })
@@ -16,7 +16,8 @@ export default function VideoWindow({ stream, label, color, isLocal, onClose, mu
   }, [isLocal])
 
   useEffect(() => {
-    if (videoRef.current && stream) {
+    if (!videoRef.current) return
+    if (stream) {
       videoRef.current.srcObject = stream
     }
   }, [stream])

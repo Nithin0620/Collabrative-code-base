@@ -14,6 +14,17 @@ services:
     image: sandbox-runner:latest
     # This is a build-only service — the image is used by the API via dockerode
 
+  livekit:
+    image: livekit/livekit-server:latest
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50010:50000-50010/udp"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml
+    command: --config /etc/livekit.yaml --bind 0.0.0.0
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -22,11 +33,16 @@ services:
       - "3000:3000"
     depends_on:
       - mongo
+      - livekit
     environment:
       - MONGODB_URI=mongodb://mongo:27017/collab-editor
       - JWT_SECRET=dev-secret-change-in-production
       - CLIENT_URL=http://localhost:5173
       - PORT=3000
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret-dev-key-change-in-production
+      - LIVEKIT_URL=http://livekit:7880
+      - LIVEKIT_WS_URL=ws://localhost:7880
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped

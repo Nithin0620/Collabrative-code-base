@@ -8,6 +8,9 @@ const router = Router()
 
 const LANGUAGES = ["javascript", "python", "java", "cpp", "c", "ruby", "go"]
 
+import Project from "../models/Project.js"
+import { getUserProjectRole } from "../middleware/auth.js"
+
 router.post("/", authenticateToken, async (req, res) => {
   try {
     const { language, code, stdin, roomId } = req.body
@@ -20,6 +23,16 @@ router.post("/", authenticateToken, async (req, res) => {
       return res.status(400).json({
         message: `Language "${language}" is not supported. Supported: ${LANGUAGES.join(", ")}`,
       })
+    }
+
+    if (roomId) {
+      const project = await Project.findOne({ roomId })
+      if (project) {
+        const role = getUserProjectRole(project, req.user._id.toString())
+        if (!role || role === "viewer") {
+          return res.status(403).json({ message: "Viewers cannot execute code" })
+        }
+      }
     }
 
     const { executionId } = await enqueueExecution({

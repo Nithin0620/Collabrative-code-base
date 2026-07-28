@@ -39,7 +39,9 @@ router.post("/:roomId", authenticateToken, async (req, res) => {
 // Delete a comment
 router.delete("/:roomId/:commentId", authenticateToken, async (req, res) => {
   try {
-    await Comment.findByIdAndDelete(req.params.commentId)
+    const comment = await Comment.findOne({ _id: req.params.commentId, roomId: req.params.roomId })
+    if (!comment) return res.status(404).json({ message: "Comment not found" })
+    await comment.deleteOne()
     res.json({ success: true })
   } catch (error) {
     res.status(500).json({ message: "Failed to delete comment" })
@@ -49,7 +51,7 @@ router.delete("/:roomId/:commentId", authenticateToken, async (req, res) => {
 // Toggle resolve
 router.patch("/:roomId/:commentId/resolve", authenticateToken, async (req, res) => {
   try {
-    const comment = await Comment.findById(req.params.commentId)
+    const comment = await Comment.findOne({ _id: req.params.commentId, roomId: req.params.roomId })
     if (!comment) return res.status(404).json({ message: "Comment not found" })
     comment.resolved = !comment.resolved
     await comment.save()
@@ -63,7 +65,7 @@ router.patch("/:roomId/:commentId/resolve", authenticateToken, async (req, res) 
 router.post("/:roomId/:commentId/reply", authenticateToken, async (req, res) => {
   try {
     const { author, avatar, color, text } = req.body
-    const comment = await Comment.findById(req.params.commentId)
+    const comment = await Comment.findOne({ _id: req.params.commentId, roomId: req.params.roomId })
     if (!comment) return res.status(404).json({ message: "Comment not found" })
     comment.replies.push({ author, avatar: avatar || "", color: color || "#888", text })
     await comment.save()
@@ -77,7 +79,7 @@ router.post("/:roomId/:commentId/reply", authenticateToken, async (req, res) => 
 router.post("/:roomId/:commentId/react", authenticateToken, async (req, res) => {
   try {
     const { emoji, author } = req.body
-    const comment = await Comment.findById(req.params.commentId)
+    const comment = await Comment.findOne({ _id: req.params.commentId, roomId: req.params.roomId })
     if (!comment) return res.status(404).json({ message: "Comment not found" })
     const reactions = comment.reactions || new Map()
     const users = reactions.get(emoji) || []
@@ -104,7 +106,7 @@ router.post("/:roomId/:commentId/react", authenticateToken, async (req, res) => 
 router.post("/:roomId/:commentId/reply/:replyId/react", authenticateToken, async (req, res) => {
   try {
     const { emoji, author } = req.body
-    const comment = await Comment.findById(req.params.commentId)
+    const comment = await Comment.findOne({ _id: req.params.commentId, roomId: req.params.roomId })
     if (!comment) return res.status(404).json({ message: "Comment not found" })
     const reply = comment.replies.id(req.params.replyId)
     if (!reply) return res.status(404).json({ message: "Reply not found" })

@@ -39,6 +39,10 @@ const userSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
     },
+    password: {
+      type: String,
+      select: false,
+    },
     avatar: {
       type: String,
       default: "",
@@ -69,9 +73,19 @@ userSchema.methods.toSafeJSON = function () {
   }
 }
 
+import bcrypt from "bcryptjs"
+
+userSchema.methods.comparePassword = async function (candidatePassword) {
+  if (!this.password) return false
+  return bcrypt.compare(candidatePassword, this.password)
+}
+
 userSchema.pre("save", async function () {
   if (!this.color) {
     this.color = hashToColor(this._id?.toString() || Math.random().toString())
+  }
+  if (this.isModified("password") && this.password) {
+    this.password = await bcrypt.hash(this.password, 10)
   }
 })
 

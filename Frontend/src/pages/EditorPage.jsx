@@ -24,11 +24,14 @@ import MouseOverlay from "../components/MouseOverlay"
 import MinimapOverlay from "../components/MinimapOverlay"
 import VideoWindow from "../components/VideoWindow"
 import VideoGallery from "../components/VideoGallery"
-import useWebRTC from "../hooks/useWebRTC"
+import useLiveKit from "../hooks/useLiveKit"
 import useProjectRole from "../hooks/useProjectRole"
 import RoleBadge from "../components/RoleBadge"
 import RoleManager from "../components/RoleManager"
 import PasswordPrompt from "../components/PasswordPrompt"
+import ShareModal from "../components/ShareModal"
+import ShortcutsModal from "../components/ShortcutsModal"
+import ToastNotification from "../components/ToastNotification"
 import { downloadFile, downloadProjectAsZip } from "../lib/download"
 
 const IDLE_TIMEOUT = 30000
@@ -36,18 +39,19 @@ const TYPING_TIMEOUT = 2000
 const AUTO_SAVE_INTERVAL = 10000
 
 function UserAvatar({ user }) {
+  const speakingClass = user?.isSpeaking ? "ring-2 ring-green-400 ring-offset-2 ring-offset-gray-900 animate-pulse" : ""
   if (user.avatar) {
     return (
       <img
         src={user.avatar}
         alt={user.username}
-        className="w-8 h-8 rounded-full object-cover"
+        className={`w-8 h-8 rounded-full object-cover ${speakingClass}`}
       />
     )
   }
   return (
     <div
-      className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0"
+      className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0 ${speakingClass}`}
       style={{ backgroundColor: user.color }}
     >
       {user.username.charAt(0).toUpperCase()}
@@ -172,14 +176,39 @@ export default function EditorPage({ roomId }) {
   const [showRoleManager, setShowRoleManager] = useState(false)
   const [needsPassword, setNeedsPassword] = useState(false)
   const [passwordVerified, setPasswordVerified] = useState(false)
+  const [editorInstance, setEditorInstance] = useState(null)
+  const [showShare, setShowShare] = useState(false)
+  const [showShortcuts, setShowShortcuts] = useState(false)
+  const [toasts, setToasts] = useState([])
 
-  const { role, members, bannedUsers, settings, canEdit, isOwner, fetchProject, fetchMembers, addMember, changeRole, kickUser, banUser, unbanUser, updateSettings } = useProjectRole(roomId)
+  const addToast = useCallback((title, message, type = "info") => {
+    const id = Date.now() + Math.random().toString(36).slice(2, 6)
+    setToasts((prev) => [...prev, { id, title, message, type }])
+  }, [])
+
+  const removeToast = useCallback((id) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id))
+  }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "/") {
+        e.preventDefault()
+        setShowShortcuts((prev) => !prev)
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [])
+
+  const { role, members, bannedUsers, settings, canEdit, isOwner, requiresPassword, requiresInvite, fetchProject, fetchMembers, addMember, changeRole, kickUser, banUser, unbanUser, updateSettings } = useProjectRole(roomId)
 
   const {
     localStream,
     remoteStreams,
     audioEnabled,
     videoEnabled,
+    isSpeaking,
     handRaised,
     setHandRaised,
     toggleAudio,
@@ -189,7 +218,7 @@ export default function EditorPage({ roomId }) {
     cleanupPeer,
     cleanup: cleanupWebRTC,
     getLocalStream,
-  } = useWebRTC(chatSocket, roomId, user)
+  } = useLiveKit(chatSocket, roomId, user)
 
   const [fileTree, setFileTree] = useState({})
   const [selectedFileId, setSelectedFileId] = useState(null)
@@ -352,7 +381,7 @@ export default function EditorPage({ roomId }) {
   }, [monaco])
 
   useEffect(() => {
-    const editor = editorRef.current
+    const editor = editorRef.current || editorInstance
     if (!editor || !selectedFileId) return
 
     setSelectionInfo(null)
@@ -378,22 +407,21 @@ export default function EditorPage({ roomId }) {
       if (!editorDom) return
       const editorRect = editorDom.getBoundingClientRect()
       const topLine = editor.getTopForLineNumber(selection.startLineNumber)
-      const bottomLine = editor.getBottomForLineNumber(selection.endLineNumber)
       const scrollTop = editor.getScrollTop()
-      const top = editorRect.top + topLine - scrollTop + 8
+      const top = editorRect.top + topLine - scrollTop - 32
 
       const endCol = selection.endColumn
-      const fontSize = editor.getOption(monaco.editor.EditorOption.fontSize)
+      const fontSize = editor.getOption(monaco.editor.EditorOption.fontSize) || 14
       const charWidth = fontSize * 0.602
       const gutterWidth = 60
       const rawLeft = editorRect.left + gutterWidth + endCol * charWidth - editor.getScrollLeft()
-      const left = Math.min(rawLeft, window.innerWidth - 100)
+      const left = Math.min(Math.max(editorRect.left + 10, rawLeft), window.innerWidth - 120)
 
       setSelectionInfo({
         startLine: selection.startLineNumber,
         endLine: selection.endLineNumber,
         selectedText,
-        top: Math.max(editorRect.top + 10, Math.min(top, editorRect.bottom - 30)),
+        top: Math.max(editorRect.top + 10, Math.min(top, editorRect.bottom - 40)),
         left,
       })
     }
@@ -402,7 +430,7 @@ export default function EditorPage({ roomId }) {
     return () => {
       disposable.dispose()
     }
-  }, [selectedFileId, monaco])
+  }, [editorInstance, selectedFileId, monaco])
 
   useEffect(() => {
     const editor = editorRef.current
@@ -429,7 +457,7 @@ export default function EditorPage({ roomId }) {
     if (!editor || !providerRef.current) return
     const awareness = providerRef.current.awareness
 
-    const disposable = editor.onMouseMove((e) => {
+    const disposableMouse = editor.onMouseMove((e) => {
       const state = awareness.getLocalState()
       if (!state?.user) return
       const editorDom = editor.getDomNode()
@@ -447,7 +475,44 @@ export default function EditorPage({ roomId }) {
         },
       })
     })
-    return () => disposable.dispose()
+
+    const disposableCursor = editor.onDidChangeCursorPosition((e) => {
+      const state = awareness.getLocalState()
+      if (!state?.user) return
+      awareness.setLocalStateField("user", {
+        ...state.user,
+        currentFileId: selectedFileId,
+        cursorPos: {
+          line: e.position.lineNumber,
+          column: e.position.column,
+          fileId: selectedFileId,
+        },
+      })
+    })
+
+    const disposableScroll = editor.onDidScrollChange(() => {
+      const state = awareness.getLocalState()
+      if (!state?.user) return
+      const visibleRanges = editor.getVisibleRanges()
+      const topRange = visibleRanges[0]
+      if (topRange) {
+        awareness.setLocalStateField("user", {
+          ...state.user,
+          currentFileId: selectedFileId,
+          cursorPos: {
+            line: topRange.startLineNumber,
+            column: topRange.startColumn,
+            fileId: selectedFileId,
+          },
+        })
+      }
+    })
+
+    return () => {
+      disposableMouse.dispose()
+      disposableCursor.dispose()
+      disposableScroll.dispose()
+    }
   }, [selectedFileId, monaco])
 
   useEffect(() => {
@@ -473,36 +538,37 @@ export default function EditorPage({ roomId }) {
   useEffect(() => {
     if (!followedUser || !providerRef.current) return
     const awareness = providerRef.current.awareness
-    const editor = editorRef.current
-    if (!editor) return
 
     const onAwareness = () => {
-      if (!scrollSyncEnabled) return
       const states = Array.from(awareness.getStates().entries())
       for (const [clientID, state] of states) {
         if (state.user?.username !== followedUser) continue
-        const pos = state.user.cursorPos
-        if (!pos) continue
-        if (pos.fileId && pos.fileId !== selectedFileId) {
-          setSelectedFileId(pos.fileId)
-          setTimeout(() => {
-            const e = editorRef.current
-            if (e && pos.line) {
-              e.revealLineInCenter(pos.line)
-              e.setPosition({ lineNumber: pos.line, column: pos.column || 1 })
-            }
-          }, 200)
-        } else if (pos.line) {
-          editor.revealLineInCenter(pos.line)
-          editor.setPosition({ lineNumber: pos.line, column: pos.column || 1 })
+        const pos = state.user?.cursorPos
+        const targetFileId = state.user?.currentFileId || pos?.fileId
+
+        if (targetFileId && targetFileId !== selectedFileId) {
+          setSelectedFileId(targetFileId)
+          if (scrollSyncEnabled && pos?.line) {
+            setTimeout(() => {
+              const e = editorRef.current
+              if (e && pos.line) {
+                e.revealLineInCenter(pos.line, 1)
+                e.setPosition({ lineNumber: pos.line, column: pos.column || 1 })
+              }
+            }, 100)
+          }
+        } else if (scrollSyncEnabled && editorRef.current && pos?.line) {
+          editorRef.current.revealLineInCenter(pos.line, 1)
+          editorRef.current.setPosition({ lineNumber: pos.line, column: pos.column || 1 })
         }
         break
       }
     }
 
+    onAwareness()
     awareness.on("change", onAwareness)
     return () => awareness.off("change", onAwareness)
-  }, [followedUser, selectedFileId, scrollSyncEnabled])
+  }, [followedUser, selectedFileId, scrollSyncEnabled, monaco])
 
   useEffect(() => {
     if (!providerRef.current) return
@@ -513,20 +579,12 @@ export default function EditorPage({ roomId }) {
       ...state.user,
       audioEnabled,
       videoEnabled,
+      isSpeaking,
       handRaised,
+      currentFileId: selectedFileId,
+      role: role || "editor",
     })
-  }, [audioEnabled, videoEnabled, handRaised])
-
-  useEffect(() => {
-    if (!providerRef.current || !role) return
-    const awareness = providerRef.current.awareness
-    const state = awareness.getLocalState()
-    if (!state?.user) return
-    awareness.setLocalStateField("user", {
-      ...state.user,
-      role,
-    })
-  }, [role])
+  }, [audioEnabled, videoEnabled, isSpeaking, handRaised, selectedFileId, role])
 
   useEffect(() => {
     if (!selectedFileId) {
@@ -618,6 +676,12 @@ export default function EditorPage({ roomId }) {
   }, [fileComments])
 
   useEffect(() => {
+    if (editorRef.current) {
+      editorRef.current.updateOptions({ readOnly: !canEdit })
+    }
+  }, [canEdit])
+
+  useEffect(() => {
     const editor = editorRef.current
     if (!editor || !monaco) return
     const editorDom = editor.getDomNode()
@@ -702,6 +766,26 @@ export default function EditorPage({ roomId }) {
     chatSocket.on("connect", () => {
       chatSocket.emit("join-room", roomId)
     })
+    chatSocket.on("room-error", (data) => {
+      alert(data.message || "Access denied")
+      navigate("/")
+    })
+    chatSocket.on("member-action-event", (data) => {
+      if (data.targetUserId && data.targetUserId === (user._id?.toString() || user.id?.toString())) {
+        if (data.action === "kick") {
+          alert("You have been kicked from this room by the owner")
+          navigate("/")
+          return
+        }
+        if (data.action === "ban") {
+          alert("You have been banned from this room by the owner")
+          navigate("/")
+          return
+        }
+      }
+      fetchProject()
+      fetchMembers()
+    })
     setChatSocket(chatSocket)
 
     const awareness = provider.awareness
@@ -725,6 +809,16 @@ export default function EditorPage({ roomId }) {
       try {
         const res = await fetch("/api/projects/" + roomId, { credentials: "include" })
         const data = await res.json()
+        if (data.requiresPassword) {
+          setNeedsPassword(true)
+          return
+        }
+        if (data.requiresInvite) {
+          setRoomAccessError("This room is invite-only. Please request an invitation from the room owner.")
+          return
+        }
+        if (!res.ok || !data.project) return
+
         const project = data.project
 
         ydoc.transact(() => {
@@ -905,31 +999,65 @@ export default function EditorPage({ roomId }) {
     }
   }, [user, token, ydoc, yFileTree, roomId])
 
+  const [roomAccessError, setRoomAccessError] = useState("")
+
+  useEffect(() => {
+    if (!roomId) return
+
+    const searchParams = new URLSearchParams(window.location.search)
+    const inviteToken = searchParams.get("inviteToken")
+
+    if (inviteToken) {
+      fetch("/api/projects/" + roomId + "/accept-invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ inviteToken }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success) {
+            // Remove token from URL
+            window.history.replaceState({}, document.title, window.location.pathname)
+            fetchProject()
+            fetchMembers()
+          }
+        })
+        .catch(() => {})
+    }
+  }, [roomId, fetchProject, fetchMembers])
+
+  useEffect(() => {
+    if (requiresPassword && !passwordVerified) {
+      setNeedsPassword(true)
+    }
+    if (requiresInvite) {
+      setRoomAccessError("This room is invite-only. Please request an invitation from the room owner.")
+    }
+  }, [requiresPassword, requiresInvite, passwordVerified])
+
   useEffect(() => {
     if (!roomId || passwordVerified) return
-    if (!settings || Object.keys(settings).length === 0) return
-    if (role !== null) return
-    if (settings.hasPassword) {
-      setNeedsPassword(true)
-      return
-    }
     fetch("/api/projects/" + roomId + "/join", { method: "POST", credentials: "include" })
       .then((r) => r.json())
       .then((data) => {
         if (data.requiresPassword) {
           setNeedsPassword(true)
+        } else if (data.requiresApproval) {
+          setRoomAccessError("This room is invite-only. Please request an invitation from the room owner.")
         } else if (data.success) {
           fetchProject()
           fetchMembers()
         }
       })
       .catch(() => {})
-  }, [roomId, settings, role, passwordVerified, fetchProject, fetchMembers])
+  }, [roomId, passwordVerified, fetchProject, fetchMembers])
 
   const addCommentRef = useRef(null)
 
   const handleMount = (editor) => {
     editorRef.current = editor
+    setEditorInstance(editor)
 
     if (providerRef.current && !bindingRef.current && selectedFileId) {
       const text = ydoc.getText("file:" + selectedFileId)
@@ -1271,26 +1399,31 @@ export default function EditorPage({ roomId }) {
                     <RoleBadge role={u.role} />
                     <div className="flex items-center gap-0.5 shrink-0">
                       {u.handRaised && (
-                        <span className="text-[11px]" title="Hand raised">&#9995;</span>
+                        <span
+                          className="text-[11px] cursor-pointer"
+                          title={isOwner || isMe ? "Click to lower hand" : "Hand raised"}
+                          onClick={() => {
+                            if (isMe) toggleHand()
+                          }}
+                        >
+                          &#9995;
+                        </span>
                       )}
                       {u.audioEnabled && (
-                        <svg className="w-3 h-3 text-green-400" fill="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-3 h-3 text-green-400" fill="currentColor" viewBox="0 0 24 24" title="Mic On">
                           <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
                           <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
                         </svg>
                       )}
                       {u.videoEnabled && (
-                        <svg className="w-3 h-3 text-blue-400" fill="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-3 h-3 text-blue-400" fill="currentColor" viewBox="0 0 24 24" title="Video On">
                           <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
                         </svg>
                       )}
                     </div>
                     <span className="text-[9px] text-gray-500 shrink-0">
-                      {u.status === "offline" && u.lastActive && (
-                        <RelativeTime timestamp={u.lastActive} />
-                      )}
-                      {u.status === "idle" && "Idle"}
-                      {u.typing && !isMe && "..."}
+                      {u.lastActive ? <RelativeTime timestamp={u.lastActive} /> : u.status}
+                      {u.typing && !isMe && " ...typing"}
                     </span>
                     {!isMe && (
                       <button
@@ -1420,7 +1553,7 @@ export default function EditorPage({ roomId }) {
                   <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
                   </svg>
-                  {videoEnabled ? "Stop" : "Video"}
+                  {videoEnabled ? "Stop" : "Cam"}
                 </button>
                 <button
                   onClick={toggleHand}
@@ -1447,22 +1580,12 @@ export default function EditorPage({ roomId }) {
                   Gallery
                 </button>
                 <button
-                  onClick={copyInviteLink}
-                  className="flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium bg-amber-500 text-gray-950 hover:bg-amber-400 transition-colors cursor-pointer"
+                  onClick={() => setShowShare(true)}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-gray-950 hover:bg-amber-400 transition-all duration-200 shadow-md hover:scale-[1.02] active:scale-95 cursor-pointer"
+                  title="Share Room (QR Code, Copy Link & Social)"
                 >
-                  {copied ? "Copied!" : "Copy Link"}
-                </button>
-                <button
-                  onClick={() => {
-                    if (navigator.share) {
-                      navigator.share({ title: "Join my room", url: inviteLink })
-                    } else {
-                      copyInviteLink()
-                    }
-                  }}
-                  className="flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-600 transition-colors cursor-pointer"
-                >
-                  Share
+                  <span>🔗</span>
+                  <span>Share</span>
                 </button>
               </div>
               <button
@@ -1523,16 +1646,12 @@ export default function EditorPage({ roomId }) {
                 </svg>
               </button>
               <button
-                onClick={copyInviteLink}
-                className={`p-1.5 rounded transition-colors cursor-pointer ${
-                  copied
-                    ? "bg-green-500 text-gray-950"
-                    : "text-gray-400 hover:bg-gray-800 hover:text-white"
-                }`}
-                title={copied ? "Copied!" : "Copy invite link"}
+                onClick={() => setShowShare(true)}
+                className="p-1.5 rounded text-amber-400 hover:bg-amber-500/20 transition-colors cursor-pointer"
+                title="Share Room (QR Code & Social)"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
                 </svg>
               </button>
               <button
@@ -1578,6 +1697,8 @@ export default function EditorPage({ roomId }) {
           onTestCases={() => setShowTestCases(true)}
           onDownloadFile={handleDownloadFile}
           onDownloadProject={handleDownloadProject}
+          readOnly={!canEdit}
+          onOpenShare={() => setShowShare(true)}
         />
 
         <div className="flex-1 overflow-hidden relative">
@@ -1596,6 +1717,7 @@ export default function EditorPage({ roomId }) {
                   automaticLayout: true,
                   tabSize: 2,
                   glyphMargin: true,
+                  readOnly: !canEdit,
                 }}
               />
               <MouseOverlay positions={remoteMousePositions} />
@@ -1607,6 +1729,7 @@ export default function EditorPage({ roomId }) {
               />
               {selectionInfo && (
                 <button
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     setPendingPrefill({
                       startLine: selectionInfo.startLine,
@@ -1643,6 +1766,8 @@ export default function EditorPage({ roomId }) {
           lastSavedTime={lastSavedTime}
           usersCount={users.length}
           isSnapshotting={isSnapshotting}
+          connectionStatus={chatSocket?.connected ? "connected" : "reconnecting"}
+          onOpenShortcuts={() => setShowShortcuts(true)}
         />
       </section>
 
@@ -1708,11 +1833,43 @@ export default function EditorPage({ roomId }) {
         />
       )}
 
+      {showShare && (
+        <ShareModal
+          roomId={roomId}
+          roomName={settings?.roomName}
+          onClose={() => setShowShare(false)}
+        />
+      )}
+
+      {showShortcuts && (
+        <ShortcutsModal onClose={() => setShowShortcuts(false)} />
+      )}
+
+      <ToastNotification toasts={toasts} onDismiss={removeToast} />
+
+      {roomAccessError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
+          <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-sm text-center shadow-2xl space-y-4">
+            <div className="w-12 h-12 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto text-2xl">
+              🔒
+            </div>
+            <h3 className="text-base font-bold text-white">Invite Only Room</h3>
+            <p className="text-xs text-gray-400">{roomAccessError}</p>
+            <button
+              onClick={() => navigate("/")}
+              className="w-full px-4 py-2 rounded-lg bg-amber-500 text-gray-950 font-semibold text-xs hover:bg-amber-400 transition-colors cursor-pointer"
+            >
+              Return to Dashboard
+            </button>
+          </div>
+        </div>
+      )}
+
       {needsPassword && (
         <PasswordPrompt
           roomId={roomId}
           onVerified={() => { setNeedsPassword(false); setPasswordVerified(true); fetchProject(); fetchMembers() }}
-          onCancel={() => setNeedsPassword(false)}
+          onCancel={() => navigate("/")}
         />
       )}
 
@@ -1834,24 +1991,41 @@ export default function EditorPage({ roomId }) {
       {users.filter((u) => u.handRaised && u.username !== user?.username).map((u) => (
         <div
           key={u.username}
-          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500/20 border border-amber-500/40 shadow-lg backdrop-blur-sm"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-amber-500/20 border border-amber-500/40 shadow-lg backdrop-blur-sm"
         >
           <span className="text-lg">&#9995;</span>
           <span className="text-sm font-medium text-amber-300">{u.username} raised their hand</span>
+          {isOwner && (
+            <button
+              onClick={() => {
+                if (chatSocket) {
+                  chatSocket.emit("chat-message", { roomId, text: `📢 Owner called on @${u.username}`, author: "System", isSystem: true })
+                }
+              }}
+              className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-500 text-gray-950 hover:bg-amber-400 cursor-pointer"
+            >
+              Call On
+            </button>
+          )}
         </div>
       ))}
 
-      {/* Pinned remote video window only */}
-      {pinnedUser && remoteStreams[pinnedUser] && (
-        <VideoWindow
-          key={pinnedUser}
-          stream={remoteStreams[pinnedUser]}
-          label={users.find((u) => u.username !== user?.username && u.username === pinnedUser)?.username || pinnedUser}
-          color={users.find((u) => u.username !== user?.username && u.username === pinnedUser)?.color || "#60a5fa"}
-          isLocal={false}
-          onClose={() => setPinnedUser(null)}
-        />
-      )}
+      {/* Active remote video windows */}
+      {Object.entries(remoteStreams).map(([peerKey, stream]) => {
+        const remoteUser = users.find((u) => u.username === peerKey || u._id === peerKey)
+        const displayName = remoteUser?.username || peerKey
+        const userColor = remoteUser?.color || "#60a5fa"
+        return (
+          <VideoWindow
+            key={peerKey}
+            stream={stream}
+            label={displayName}
+            color={userColor}
+            isLocal={false}
+            onClose={() => {}}
+          />
+        )
+      })}
 
       {/* Camera on toast */}
       {(() => {

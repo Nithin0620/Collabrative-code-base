@@ -20,17 +20,8 @@ function MinimapOverlay({ editorRef, users, localUsername, monaco }) {
       if (totalLines === 0) return
 
       const minimapRect = minimapEl.getBoundingClientRect()
-      const minimapWidth = minimapRect.width
       const minimapHeight = minimapRect.height
-      if (minimapHeight === 0 || minimapWidth === 0) return
-
-      const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight)
-      const scrollHeight = editor.getScrollHeight()
-      const viewportHeight = editor.getLayoutInfo().height
-      if (scrollHeight <= viewportHeight) {
-        setDots([])
-        return
-      }
+      if (minimapHeight === 0) return
 
       const newDots = []
 
@@ -39,12 +30,8 @@ function MinimapOverlay({ editorRef, users, localUsername, monaco }) {
         if (!u.cursorPos || u.status === "offline") return
 
         const line = u.cursorPos.line || 1
-        const lineY = (line - 1) * lineHeight
-
-        const fraction = lineY / (scrollHeight - viewportHeight)
-        const minimapSliderHeight = (viewportHeight / scrollHeight) * minimapHeight
-        const minimapSliderMaxTop = minimapHeight - minimapSliderHeight
-        const dotY = Math.max(0, Math.min(minimapHeight - 4, fraction * minimapSliderMaxTop))
+        const lineFraction = totalLines > 1 ? (line - 1) / (totalLines - 1) : 0
+        const dotY = Math.max(4, Math.min(minimapHeight - 4, lineFraction * (minimapHeight - 8)))
 
         newDots.push({
           id: u.username,
@@ -73,9 +60,9 @@ function MinimapOverlay({ editorRef, users, localUsername, monaco }) {
     e.stopPropagation()
     const editor = editorRef?.current
     if (!editor || !dot.line) return
-    editor.revealLineInCenter(dot.line)
+    editor.revealLineInCenter(dot.line, monaco.editor.ScrollType.Smooth)
     editor.setPosition({ lineNumber: dot.line, column: 1 })
-  }, [editorRef])
+  }, [editorRef, monaco])
 
   if (dots.length === 0) return null
 
@@ -84,21 +71,29 @@ function MinimapOverlay({ editorRef, users, localUsername, monaco }) {
       {dots.map((dot) => (
         <div
           key={dot.id}
-          className="absolute pointer-events-auto cursor-pointer"
+          className="absolute pointer-events-auto cursor-pointer flex items-center justify-end"
           style={{
-            right: 10,
+            right: 8,
             top: dot.y,
-            width: 6,
-            height: 6,
-            borderRadius: "50%",
-            backgroundColor: dot.color,
-            boxShadow: `0 0 6px ${dot.color}`,
-            border: "1px solid rgba(255,255,255,0.6)",
             transform: "translateY(-50%)",
           }}
-          title={dot.name + " (line " + dot.line + ")"}
+          title={`${dot.name} (Line ${dot.line}) - Click to jump`}
           onClick={(e) => handleClick(e, dot)}
-        />
+        >
+          <span className="text-[9px] font-semibold text-white px-1 py-0.2 bg-gray-900/80 rounded mr-1 opacity-0 hover:opacity-100 transition-opacity">
+            {dot.name}
+          </span>
+          <div
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              backgroundColor: dot.color,
+              boxShadow: `0 0 6px ${dot.color}`,
+              border: "1px solid rgba(255,255,255,0.8)",
+            }}
+          />
+        </div>
       ))}
     </div>
   )

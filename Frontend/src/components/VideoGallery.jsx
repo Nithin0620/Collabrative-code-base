@@ -28,7 +28,8 @@ function GalleryTile({ stream, user: u, isLocal, isPinned, onPin }) {
   const hasVideo = !!stream
 
   useEffect(() => {
-    if (videoRef.current && stream) {
+    if (!videoRef.current) return
+    if (stream) {
       videoRef.current.srcObject = stream
     }
   }, [stream])
@@ -125,15 +126,12 @@ export default function VideoGallery({ remoteStreams, localStream, users, user, 
               isPinned={false}
               onPin={() => {}}
             />
-            {allRemoteUsers.map((u) => {
-              const streamEntry = Object.entries(remoteStreams).find(([peerId]) => {
-                return true
-              })
-              const peerStream = streamEntry ? streamEntry[1] : null
+            {allRemoteUsers.map((u, idx) => {
+              const remoteStream = remoteStreams[u.username] || remoteStreams[u._id] || Object.values(remoteStreams)[idx]
               return (
                 <GalleryTile
                   key={u.username}
-                  stream={peerStream}
+                  stream={remoteStream}
                   user={u}
                   isLocal={false}
                   isPinned={pinnedUser === u.username}
