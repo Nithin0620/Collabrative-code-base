@@ -7,8 +7,6 @@ rtc:
 keys:
   devkey: secret-dev-key-change-in-production
 turn:
-  enabled: true
-  domain: localhost
-  tls_port: 3478
+  enabled: false
 logging:
   level: info

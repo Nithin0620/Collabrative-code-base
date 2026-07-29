@@ -83,6 +83,7 @@ export function requireProjectRole(...allowedRoles) {
       const role = getUserProjectRole(project, req.user._id.toString())
 
       if (!role || !allowedRoles.includes(role)) {
+        console.error(`[requireProjectRole] User ${req.user._id} has role "${role}" but ${allowedRoles.join(" or ")} required for room ${roomId}, createdBy=${project.createdBy}`)
         return res.status(403).json({ message: "Insufficient permissions" })
       }
 
@@ -90,6 +91,7 @@ export function requireProjectRole(...allowedRoles) {
       req.userRole = role
       next()
     } catch (error) {
+      console.error("[requireProjectRole] Error:", error)
       return res.status(500).json({ message: "Permission check failed" })
     }
   }

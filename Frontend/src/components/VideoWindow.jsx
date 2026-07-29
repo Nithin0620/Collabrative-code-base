@@ -59,11 +59,13 @@ export default function VideoWindow({ stream, trackRef, label, color, isLocal, o
       document.body.style.userSelect = ""
       document.removeEventListener("mousemove", onMove)
       document.removeEventListener("mouseup", onUp)
+      document.removeEventListener("pointermove", onMove)
       document.removeEventListener("pointerup", onUp)
       document.removeEventListener("pointercancel", onUp)
     }
     document.addEventListener("mousemove", onMove)
     document.addEventListener("mouseup", onUp)
+    document.addEventListener("pointermove", onMove)
     document.addEventListener("pointerup", onUp)
     document.addEventListener("pointercancel", onUp)
   }

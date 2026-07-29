@@ -1,7 +1,7 @@
 import { useState } from "react"
 import RoleBadge from "./RoleBadge"
 
-export default function RoleManager({ roomId, members, bannedUsers, settings, isOwner, onAddMember, onChangeRole, onKick, onBan, onUnban, onUpdateSettings, onClose }) {
+export default function RoleManager({ roomId, members, bannedUsers, settings, isOwner, onAddMember, onChangeRole, onKick, onBan, onUnban, onUpdateSettings, onClose, onRefresh }) {
   const [addUsername, setAddUsername] = useState("")
   const [addRole, setAddRole] = useState("editor")
   const [error, setError] = useState("")
@@ -11,8 +11,28 @@ export default function RoleManager({ roomId, members, bannedUsers, settings, is
   const [readOnly, setReadOnly] = useState(settings.readOnly || false)
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+  const [performingAction, setPerformingAction] = useState(null)
 
   const [successMessage, setSuccessMessage] = useState("")
+
+  const handleAction = async (action, actionFn, ...args) => {
+    setError("")
+    setSuccessMessage("")
+    setPerformingAction(action)
+    try {
+      const result = await actionFn(...args)
+      if (result?.error) {
+        setError(`Failed to ${action}: ${result.error}`)
+      } else {
+        setSuccessMessage(`${action.charAt(0).toUpperCase() + action.slice(1)} successful`)
+        if (onRefresh) onRefresh()
+      }
+    } catch (err) {
+      setError(`Failed to ${action}: ${err.message}`)
+    } finally {
+      setPerformingAction(null)
+    }
+  }
 
   const handleAdd = async () => {
     if (!addUsername.trim()) return
@@ -34,10 +54,8 @@ export default function RoleManager({ roomId, members, bannedUsers, settings, is
     }
     setError("")
     setSuccessMessage("")
-    const update = { inviteOnly, readOnly }
-    if (password.trim() !== "") {
-      update.password = password.trim()
-    }
+    const update = { inviteOnly, readOnly, password: password.trim() }
+    if (update.password && update.password !== confirmPassword) return
     const result = await onUpdateSettings(update)
     if (result?.error) {
       setError(result.error)
@@ -109,13 +127,13 @@ export default function RoleManager({ roomId, members, bannedUsers, settings, is
                   {isOwner && m.role !== "owner" && (
                     <div className="ml-auto flex items-center gap-1 shrink-0">
                       {m.role !== "viewer" && (
-                        <button onClick={() => onChangeRole(m._id, "viewer")} className="text-[9px] text-gray-500 hover:text-gray-300 cursor-pointer" title="Make viewer">Viewer</button>
+                        <button onClick={() => handleAction("change role", onChangeRole, m._id, "viewer")} disabled={performingAction} className="text-[9px] text-gray-500 hover:text-gray-300 disabled:opacity-40 cursor-pointer" title="Make viewer">Viewer</button>
                       )}
                       {m.role !== "editor" && (
-                        <button onClick={() => onChangeRole(m._id, "editor")} className="text-[9px] text-gray-500 hover:text-gray-300 cursor-pointer" title="Make editor">Editor</button>
+                        <button onClick={() => handleAction("change role", onChangeRole, m._id, "editor")} disabled={performingAction} className="text-[9px] text-gray-500 hover:text-gray-300 disabled:opacity-40 cursor-pointer" title="Make editor">Editor</button>
                       )}
-                      <button onClick={() => onKick(m._id)} className="text-[9px] text-orange-400 hover:text-orange-300 cursor-pointer" title="Kick">Kick</button>
-                      <button onClick={() => onBan(m._id)} className="text-[9px] text-red-400 hover:text-red-300 cursor-pointer" title="Ban">Ban</button>
+                      <button onClick={() => handleAction("kick", onKick, m._id)} disabled={performingAction} className="text-[9px] text-orange-400 hover:text-orange-300 disabled:opacity-40 cursor-pointer" title="Kick">Kick</button>
+                      <button onClick={() => handleAction("ban", onBan, m._id)} disabled={performingAction} className="text-[9px] text-red-400 hover:text-red-300 disabled:opacity-40 cursor-pointer" title="Ban">Ban</button>
                     </div>
                   )}
                 </li>
@@ -139,8 +157,10 @@ export default function RoleManager({ roomId, members, bannedUsers, settings, is
                     <span className="text-xs text-gray-300">Read Only (all non-owners become viewers)</span>
                   </label>
                   <div>
-                    <label className="text-xs text-gray-400 block mb-1">Set Password</label>
-                    <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password (blank = remove)" className="w-full px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-xs text-white placeholder-gray-500 focus:outline-none focus:border-amber-500" />
+                    <label className="text-xs text-gray-400 block mb-1">
+                      Password {settings.hasPassword ? <span className="text-amber-400">(already set)</span> : "(optional)"}
+                    </label>
+                    <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={settings.hasPassword ? "New password (blank = remove)" : "Set password"} className="w-full px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-xs text-white placeholder-gray-500 focus:outline-none focus:border-amber-500" />
                   </div>
                   {password && (
                     <div>

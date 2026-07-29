@@ -11,6 +11,8 @@ import { getFileInfo, generateId } from "../lib/fileTree"
 import { defineCustomThemes } from "../lib/themes"
 import FileExplorer from "../components/FileExplorer"
 import EditorToolbar from "../components/EditorToolbar"
+import TabBar from "../components/TabBar"
+import TerminalPanel from "../components/TerminalPanel"
 import StatusBar from "../components/StatusBar"
 import SnapshotHistory from "../components/SnapshotHistory"
 import SnapshotDialog from "../components/SnapshotDialog"
@@ -222,6 +224,91 @@ export default function EditorPage({ roomId }) {
 
   const [fileTree, setFileTree] = useState({})
   const [selectedFileId, setSelectedFileId] = useState(null)
+  const [openTabs, setOpenTabs] = useState([])
+  const [showTerminal, setShowTerminal] = useState(false)
+
+  const previewFileIdRef = useRef(null)
+
+  const openTab = useCallback((fileId) => {
+    setOpenTabs((prev) => {
+      if (prev.includes(fileId)) {
+        setSelectedFileId(fileId)
+        return prev
+      }
+      const prevPreview = previewFileIdRef.current
+      previewFileIdRef.current = fileId
+      setSelectedFileId(fileId)
+      if (prevPreview && prev.includes(prevPreview)) {
+        return prev.map((id) => id === prevPreview ? fileId : id)
+      }
+      return [...prev, fileId]
+    })
+  }, [])
+
+  const closeTab = useCallback((fileId) => {
+    if (previewFileIdRef.current === fileId) previewFileIdRef.current = null
+    setOpenTabs((prev) => {
+      const idx = prev.indexOf(fileId)
+      const next = prev.filter((id) => id !== fileId)
+      if (selectedFileId === fileId) {
+        const nextActive = next[idx] || next[idx - 1] || next[0] || null
+        setSelectedFileId(nextActive)
+      }
+      return next
+    })
+  }, [selectedFileId])
+
+  const closeOtherTabs = useCallback((fileId) => {
+    setOpenTabs([fileId])
+    setSelectedFileId(fileId)
+  }, [])
+
+  const closeAllTabs = useCallback(() => {
+    setOpenTabs([])
+    setSelectedFileId(null)
+  }, [])
+
+  const closeTabsToRight = useCallback((fileId) => {
+    setOpenTabs((prev) => {
+      const idx = prev.indexOf(fileId)
+      return prev.slice(0, idx + 1)
+    })
+  }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "`") {
+        e.preventDefault()
+        setShowTerminal((prev) => !prev)
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [])
+
+  useEffect(() => {
+    const handleTabShortcuts = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'w') {
+        e.preventDefault()
+        if (selectedFileId) closeTab(selectedFileId)
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') {
+        if (openTabs.length > 1) {
+          e.preventDefault()
+          const idx = openTabs.indexOf(selectedFileId)
+          if (e.shiftKey) {
+            const nextIdx = idx > 0 ? idx - 1 : openTabs.length - 1
+            setSelectedFileId(openTabs[nextIdx])
+          } else {
+            const nextIdx = idx < openTabs.length - 1 ? idx + 1 : 0
+            setSelectedFileId(openTabs[nextIdx])
+          }
+        }
+      }
+    }
+    window.addEventListener("keydown", handleTabShortcuts)
+    return () => window.removeEventListener("keydown", handleTabShortcuts)
+  }, [selectedFileId, openTabs])
+
   const [theme, setTheme] = useState("vs-dark")
   const [fontSize, setFontSize] = useState(14)
   const [isSaving, setIsSaving] = useState(false)
@@ -464,6 +551,7 @@ export default function EditorPage({ roomId }) {
       if (!editorDom) return
       const rect = editorDom.getBoundingClientRect()
       const nativeEvent = e.browserEvent
+      if (!nativeEvent) return
       awareness.setLocalStateField("user", {
         ...state.user,
         mousePos: {
@@ -740,7 +828,17 @@ export default function EditorPage({ roomId }) {
       providerRef.current.awareness
     )
 
+    // First local edit pins the preview tab
+    const pinTab = (event, transaction) => {
+      if (transaction.local) {
+        previewFileIdRef.current = null
+        text.unobserve(pinTab)
+      }
+    }
+    text.observe(pinTab)
+
     return () => {
+      text.unobserve(pinTab)
       if (bindingRef.current) {
         bindingRef.current.destroy()
         bindingRef.current = null
@@ -779,20 +877,24 @@ export default function EditorPage({ roomId }) {
       navigate("/")
     })
     chatSocket.on("member-action-event", (data) => {
-      if (data.targetUserId && data.targetUserId === (user._id?.toString() || user.id?.toString())) {
-        if (data.action === "kick") {
-          alert("You have been kicked from this room by the owner")
-          navigate("/")
-          return
+      try {
+        if (data.targetUserId && data.targetUserId === (user._id?.toString() || user.id?.toString())) {
+          if (data.action === "kick") {
+            alert("You have been kicked from this room by the owner")
+            navigate("/")
+            return
+          }
+          if (data.action === "ban") {
+            alert("You have been banned from this room by the owner")
+            navigate("/")
+            return
+          }
         }
-        if (data.action === "ban") {
-          alert("You have been banned from this room by the owner")
-          navigate("/")
-          return
-        }
+        fetchProject()
+        fetchMembers()
+      } catch (err) {
+        console.error("member-action-event handler error:", err)
       }
-      fetchProject()
-      fetchMembers()
     })
     setChatSocket(chatSocket)
 
@@ -813,7 +915,7 @@ export default function EditorPage({ roomId }) {
       role: role || "editor",
     })
 
-    const fetchProject = async () => {
+    const loadProjectData = async () => {
       try {
         const res = await fetch("/api/projects/" + roomId, { credentials: "include" })
         const data = await res.json()
@@ -857,13 +959,14 @@ export default function EditorPage({ roomId }) {
         const firstFile = Object.values(tree).find((item) => item.type === "file")
         if (firstFile) {
           setSelectedFileId(firstFile.id)
+          setOpenTabs([firstFile.id])
         }
-      } catch (err) {
-        console.error("Failed to load project:", err)
-      }
+    } catch (err) {
+      console.error("Failed to load project:", err)
     }
+  }
 
-    fetchProject()
+    loadProjectData()
 
     const activityEvents = ["mousemove", "click", "mousedown", "touchstart"]
     const onActivity = () => {
@@ -1110,8 +1213,8 @@ export default function EditorPage({ roomId }) {
     if (text.toString() === "") {
       text.insert(0, "")
     }
-    setSelectedFileId(id)
-  }, [yFileTree, ydoc])
+    openTab(id)
+  }, [yFileTree, ydoc, openTab])
 
   const handleCreateFolder = useCallback((name, parentId) => {
     const id = "folder_" + generateId()
@@ -1135,12 +1238,8 @@ export default function EditorPage({ roomId }) {
       toDelete.forEach((key) => yFileTree.delete(key))
     })
 
-    if (selectedFileId === id) {
-      const tree = getFileTreeObj()
-      const remaining = Object.values(tree).filter((item) => item.type === "file" && !toDelete.includes(item.id))
-      setSelectedFileId(remaining[0]?.id || null)
-    }
-  }, [yFileTree, ydoc, selectedFileId, getFileTreeObj])
+    toDelete.forEach((key) => closeTab(key))
+  }, [yFileTree, ydoc, closeTab])
 
   const handleMove = useCallback((itemId, newParentId) => {
     const item = yFileTree.get(itemId)
@@ -1341,7 +1440,7 @@ export default function EditorPage({ roomId }) {
               onClick={() => {
                 if (Object.keys(fileTree).length > 0) {
                   const firstFile = Object.values(fileTree).find((item) => item.type === "file")
-                  if (firstFile) setSelectedFileId(firstFile.id)
+                  if (firstFile) openTab(firstFile.id)
                 }
               }}
               className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition-colors cursor-pointer"
@@ -1356,7 +1455,7 @@ export default function EditorPage({ roomId }) {
           <FileExplorer
             fileTree={fileTree}
             selectedFileId={selectedFileId}
-            onSelect={(item) => setSelectedFileId(item.id)}
+            onSelect={(item) => openTab(item.id)}
             onCreateFile={handleCreateFile}
             onCreateFolder={handleCreateFolder}
             onRename={handleRename}
@@ -1707,63 +1806,88 @@ export default function EditorPage({ roomId }) {
           onDownloadProject={handleDownloadProject}
           readOnly={!canEdit}
           onOpenShare={() => setShowShare(true)}
+          showTerminal={showTerminal}
+          onToggleTerminal={() => setShowTerminal(!showTerminal)}
+        />
+        <TabBar
+          tabs={openTabs.map(id => ({
+            id,
+            name: fileTree[id]?.name || id,
+            dirty: false
+          })).filter(t => fileTree[t.id])}
+          activeTabId={selectedFileId}
+          onTabClick={openTab}
+          onTabDoubleClick={(id) => { if (previewFileIdRef.current === id) previewFileIdRef.current = null }}
+          onTabClose={closeTab}
+          onTabCloseOthers={closeOtherTabs}
+          onTabCloseAll={closeAllTabs}
+          onTabCloseRight={closeTabsToRight}
         />
 
-        <div className="flex-1 overflow-hidden relative">
-          {selectedFileId ? (
-            <>
-              <Editor
-                height="100%"
-                language={selectedFileLanguage}
-                theme={theme}
-                onMount={handleMount}
-                options={{
-                  fontSize,
-                  minimap: { enabled: true, scale: 1 },
-                  scrollBeyondLastLine: false,
-                  wordWrap: "on",
-                  automaticLayout: true,
-                  tabSize: 2,
-                  glyphMargin: true,
-                  readOnly: !canEdit,
-                }}
-              />
-              <MouseOverlay positions={remoteMousePositions} />
-              <MinimapOverlay
-                editorRef={editorRef}
-                users={users}
-                localUsername={user?.username}
-                monaco={monaco}
-              />
-              {selectionInfo && (
-                <button
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setPendingPrefill({
-                      startLine: selectionInfo.startLine,
-                      endLine: selectionInfo.endLine,
-                      selectedText: selectionInfo.selectedText,
-                    })
-                    setShowComments(true)
-                    setShowChat(false)
+        <div className="flex-1 overflow-hidden relative flex flex-col">
+          <div className="flex-1 overflow-hidden relative">
+            {selectedFileId ? (
+              <>
+                <Editor
+                  height="100%"
+                  language={selectedFileLanguage}
+                  theme={theme}
+                  onMount={handleMount}
+                  options={{
+                    fontSize,
+                    minimap: { enabled: true, scale: 1 },
+                    scrollBeyondLastLine: false,
+                    wordWrap: "on",
+                    automaticLayout: true,
+                    tabSize: 2,
+                    glyphMargin: true,
+                    readOnly: !canEdit,
                   }}
-                  className="fixed z-50 flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500 text-gray-950 text-xs font-semibold shadow-lg hover:bg-amber-400 transition-colors cursor-pointer"
-                  style={{ top: selectionInfo.top, left: selectionInfo.left }}
-                >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-                  </svg>
-                  Comment
-                </button>
-              )}
-            </>
-          ) : (
-            <div className="h-full flex items-center justify-center text-gray-500">
-              <div className="text-center">
-                <p className="text-lg mb-2">No file selected</p>
-                <p className="text-sm">Create a file in the explorer to get started</p>
+                />
+                <MouseOverlay positions={remoteMousePositions} />
+                <MinimapOverlay
+                  editorRef={editorRef}
+                  users={users}
+                  localUsername={user?.username}
+                  monaco={monaco}
+                />
+                {selectionInfo && (
+                  <button
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setPendingPrefill({
+                        startLine: selectionInfo.startLine,
+                        endLine: selectionInfo.endLine,
+                        selectedText: selectionInfo.selectedText,
+                      })
+                      setShowComments(true)
+                      setShowChat(false)
+                    }}
+                    className="fixed z-50 flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500 text-gray-950 text-xs font-semibold shadow-lg hover:bg-amber-400 transition-colors cursor-pointer"
+                    style={{ top: selectionInfo.top, left: selectionInfo.left }}
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                    </svg>
+                    Comment
+                  </button>
+                )}
+              </>
+            ) : (
+              <div className="h-full flex items-center justify-center text-gray-500">
+                <div className="text-center">
+                  <p className="text-lg mb-2">No file selected</p>
+                  <p className="text-sm">Create a file in the explorer to get started</p>
+                </div>
               </div>
-            </div>
+            )}
+          </div>
+          {showTerminal && (
+            <TerminalPanel
+              socket={chatSocket}
+              roomId={roomId}
+              onClose={() => setShowTerminal(false)}
+            />
           )}
         </div>
 
@@ -1837,6 +1961,7 @@ export default function EditorPage({ roomId }) {
           onBan={banUser}
           onUnban={unbanUser}
           onUpdateSettings={updateSettings}
+          onRefresh={fetchMembers}
           onClose={() => setShowRoleManager(false)}
         />
       )}
@@ -2027,22 +2152,23 @@ export default function EditorPage({ roomId }) {
         </div>
       ))}
 
-      {/* Active remote video windows */}
-      {Object.entries(remoteStreams).map(([peerKey, stream]) => {
-        const remoteUser = users.find((u) => u.username === peerKey || u._id === peerKey)
-        const displayName = remoteUser?.username || peerKey
-        const userColor = remoteUser?.color || "#60a5fa"
+      {/* Pinned user floating video window */}
+      {pinnedUser && (() => {
+        const pinnedUserData = users.find((u) => u.username === pinnedUser)
+        if (!pinnedUserData) return null
+        const stream = remoteStreams[pinnedUserData.username] || remoteStreams[pinnedUserData._id]
+        if (!stream) return null
         return (
           <VideoWindow
-            key={peerKey}
+            key={pinnedUser}
             stream={stream}
-            label={displayName}
-            color={userColor}
+            label={pinnedUserData.username}
+            color={pinnedUserData.color || "#60a5fa"}
             isLocal={false}
-            onClose={() => {}}
+            onClose={() => setPinnedUser(null)}
           />
         )
-      })}
+      })()}
 
       {/* Camera on toast */}
       {(() => {

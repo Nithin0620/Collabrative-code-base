@@ -247,6 +247,37 @@ router.get("/:roomId/members", authenticateToken, requireRoomAccess, async (req,
       }
     })
 
+    // Include connected non-member users from sockets
+    const io = req.app.get('io')
+    if (io) {
+      const sockets = await io.of('/').in(req.params.roomId).fetchSockets()
+      const connectedUserIds = new Set()
+      for (const s of sockets) {
+        if (s.user?._id) {
+          const uid = s.user._id.toString()
+          if (uid !== project.createdBy?.toString() && !project.members?.has(uid)) {
+            connectedUserIds.add(uid)
+          }
+        }
+      }
+      if (connectedUserIds.size > 0) {
+        const connectedUsers = await User.find({ _id: { $in: Array.from(connectedUserIds) } })
+          .select("username avatar color isGuest")
+        for (const u of connectedUsers) {
+          members.push({
+            _id: u._id.toString(),
+            username: u.username,
+            avatar: u.avatar,
+            color: u.color,
+            isGuest: u.isGuest,
+            role: "viewer",
+            joinedAt: null,
+            online: true,
+          })
+        }
+      }
+    }
+
     res.json({ members, bannedUsers: project.bannedUsers || [] })
   } catch (error) {
     res.status(500).json({ message: "Failed to load members" })
@@ -304,6 +335,7 @@ router.patch("/:roomId/members/:userId/role", authenticateToken, requireProjectR
 
     res.json({ success: true })
   } catch (error) {
+    console.error("[changeRole] Error:", error)
     res.status(500).json({ message: "Failed to update role" })
   }
 })
@@ -323,6 +355,7 @@ router.delete("/:roomId/members/:userId", authenticateToken, requireProjectRole(
 
     res.json({ success: true })
   } catch (error) {
+    console.error("[removeMember] Error:", error)
     res.status(500).json({ message: "Failed to remove member" })
   }
 })
@@ -340,8 +373,23 @@ router.post("/:roomId/kick/:userId", authenticateToken, requireProjectRole("owne
     project.markModified("members")
     await project.save()
 
+    const io = req.app.get("io")
+    if (io) {
+      const roomId = req.params.roomId
+      const sockets = await io.of("/").in(roomId).fetchSockets()
+      for (const socket of sockets) {
+        if (socket.user?._id?.toString() === userId) {
+          socket.emit("member-action-event", { action: "kick", targetUserId: userId })
+          socket.leave(roomId)
+          socket.disconnect(true)
+        }
+      }
+      io.to(roomId).emit("member-action-event", { action: "kick", targetUserId: userId })
+    }
+
     res.json({ success: true, kicked: userId })
   } catch (error) {
+    console.error("[kick] Error:", error)
     res.status(500).json({ message: "Failed to kick user" })
   }
 })
@@ -365,8 +413,23 @@ router.post("/:roomId/ban/:userId", authenticateToken, requireProjectRole("owner
     project.markModified("bannedUsers")
     await project.save()
 
+    const io = req.app.get("io")
+    if (io) {
+      const roomId = req.params.roomId
+      const sockets = await io.of("/").in(roomId).fetchSockets()
+      for (const socket of sockets) {
+        if (socket.user?._id?.toString() === userId) {
+          socket.emit("member-action-event", { action: "ban", targetUserId: userId })
+          socket.leave(roomId)
+          socket.disconnect(true)
+        }
+      }
+      io.to(roomId).emit("member-action-event", { action: "ban", targetUserId: userId })
+    }
+
     res.json({ success: true, banned: userId })
   } catch (error) {
+    console.error("[ban] Error:", error)
     res.status(500).json({ message: "Failed to ban user" })
   }
 })
@@ -404,8 +467,24 @@ router.patch("/:roomId/settings", authenticateToken, requireProjectRole("owner")
     settingsObj.hasPassword = !!settingsObj.password
     settingsObj.password = undefined
 
+    // Update roles for connected Yjs namespace sockets when readOnly toggles
+    if (typeof readOnly === "boolean") {
+      const io = req.app.get("io")
+      if (io) {
+        const yjsNsp = io.of("/yjs|" + req.params.roomId)
+        const sockets = await yjsNsp.fetchSockets()
+        for (const socket of sockets) {
+          const uid = socket.user?._id?.toString()
+          if (uid) {
+            socket.data.yRole = getUserProjectRole(project, uid)
+          }
+        }
+      }
+    }
+
     res.json({ success: true, settings: settingsObj })
   } catch (error) {
+    console.error("[settings] Error:", error)
     res.status(500).json({ message: "Failed to update settings" })
   }
 })
@@ -433,7 +512,7 @@ router.post("/:roomId/verify-password", authenticateToken, async (req, res) => {
     }
 
     const assignedRole = project.settings?.readOnly ? "viewer" : "editor"
-    if (!project.members?.has(userId) && project.createdBy?.toString() !== userId) {
+    if (!project.settings?.inviteOnly && !project.members?.has(userId) && project.createdBy?.toString() !== userId) {
       project.members.set(userId, { role: assignedRole, joinedAt: new Date() })
       await project.save()
     }

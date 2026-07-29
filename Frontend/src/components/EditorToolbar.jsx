@@ -23,6 +23,8 @@ export default function EditorToolbar({
   onDownloadProject,
   readOnly,
   onOpenShare,
+  showTerminal,
+  onToggleTerminal,
 }) {
   const lang = filename ? getFileInfo(filename) : null
 
@@ -176,6 +178,20 @@ export default function EditorToolbar({
 
         <div className="w-px h-4 bg-gray-700" />
 
+        <button
+          onClick={onToggleTerminal}
+          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer flex items-center gap-1 ${
+            showTerminal
+              ? "bg-green-500/20 text-green-400 border border-green-500/30"
+              : "bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-white"
+          }`}
+          title="Toggle Terminal (Ctrl+`)"
+        >
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          Terminal
+        </button>
         <button
           onClick={onToggleComments}
           className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${

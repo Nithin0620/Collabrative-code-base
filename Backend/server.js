@@ -19,6 +19,8 @@ import { createWorker } from "./utils/execQueue.js"
 import { executeCode } from "./utils/sandboxRunner.js"
 import snippetRoutes from "./routes/snippets.js"
 import testCaseRoutes from "./routes/testCases.js"
+import terminalRoutes from "./routes/terminal.js"
+import { createTerminal, getTerminal, killTerminal } from "./utils/terminalManager.js"
 import User from "./models/User.js"
 import Project from "./models/Project.js"
 import { getUserProjectRole } from "./middleware/auth.js"
@@ -47,7 +49,7 @@ const io = new Server(httpServer, {
 })
 
 setIO(io)
-createWorker(executeCode, io)
+app.set('io', io)
 
 io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token || socket.handshake.query?.token
@@ -66,8 +68,82 @@ io.use(async (socket, next) => {
   }
 })
 
-const ySocketIO = new YSocketIO(io)
+const ySocketIO = new YSocketIO(io, {
+  async authenticate(handshake) {
+    const nsp = handshake.nsp || ''
+    if (!nsp.startsWith('/yjs|')) return true
+    const roomId = nsp.replace('/yjs|', '')
+    if (!roomId) return true
+
+    const token = handshake.auth?.token || handshake.query?.token
+    if (!token) return false
+
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET)
+      const user = await User.findById(decoded.userId).select('-__v')
+      if (!user) return false
+
+      const project = await Project.findOne({ roomId })
+      if (!project) return true
+
+      const userId = user._id.toString()
+      const isOwner = project.createdBy?.toString() === userId
+
+      if (project.bannedUsers?.includes(userId)) return false
+
+      if (project.settings?.inviteOnly && !isOwner) {
+        const members = project.members
+        let isMember = false
+        if (members) {
+          if (typeof members.has === 'function') isMember = members.has(userId)
+          if (!isMember && typeof members.entries === 'function') {
+            for (const [k] of members.entries()) {
+              if (k.toString() === userId) { isMember = true; break }
+            }
+          }
+        }
+        if (!isMember) return false
+      }
+
+      if (project.settings?.password && !isOwner) {
+        const cookieHeader = handshake.headers?.cookie || ''
+        if (!cookieHeader.includes(`pwd_${roomId}=verified`)) return false
+      }
+
+      return true
+    } catch {
+      return false
+    }
+  }
+})
 ySocketIO.initialize()
+
+// Enforce read-only and project role for Yjs document sync
+const yjsNsp = io.of(/^\/yjs\|.*$/)
+yjsNsp.use((socket, next) => {
+  const roomId = (socket.nsp.name || '').replace('/yjs|', '')
+  const userId = socket.user?._id?.toString()
+  if (userId && roomId) {
+    Project.findOne({ roomId }).then(project => {
+      if (project) {
+        socket.data.yRole = getUserProjectRole(project, userId)
+      }
+      next()
+    }).catch(() => next())
+  } else {
+    next()
+  }
+})
+yjsNsp.on("connection", (socket) => {
+  const listeners = socket.listeners("sync-update")
+  if (listeners.length > 0) {
+    socket.removeAllListeners("sync-update")
+    socket.on("sync-update", (update) => {
+      if (socket.data.yRole === "viewer") return
+      for (const fn of listeners) fn(update)
+    })
+  }
+})
 
 app.use("/auth", authRoutes)
 app.use("/api/projects", projectRoutes)
@@ -76,6 +152,7 @@ app.use("/api/chat", chatRoutes)
 app.use("/api/execute", executeRoutes)
 app.use("/api/snippets", snippetRoutes)
 app.use("/api/testcases", testCaseRoutes)
+app.use("/api/terminal", terminalRoutes)
 
 app.post("/api/livekit/token", async (req, res) => {
   try {
@@ -107,6 +184,7 @@ app.post("/api/livekit/token", async (req, res) => {
 })
 
 const roomMembers = new Map()
+const socketTerminals = new Map() // socket.id -> Set of terminalIds
 
 io.on("connection", (socket) => {
   socket.on("chat-message", (data) => {
@@ -223,7 +301,65 @@ io.on("connection", (socket) => {
     }
   })
 
-  socket.on("disconnect", () => {
+  // ---- TERMINAL HANDLERS ----
+  socket.on('terminal:create', async (data) => {
+    const { terminalId, cols = 80, rows = 24 } = data
+    const roomId = socket.data.roomId
+    if (!socket.user || !roomId) {
+      socket.emit('terminal:error', { terminalId, message: 'Not in a room' })
+      return
+    }
+    try {
+      const session = await createTerminal(terminalId, roomId, socket.user._id?.toString(), cols, rows)
+      
+      if (!socketTerminals.has(socket.id)) {
+        socketTerminals.set(socket.id, new Set())
+      }
+      socketTerminals.get(socket.id).add(terminalId)
+
+      session.on('data', (output) => {
+        socket.emit('terminal:output', { terminalId, data: output })
+      })
+      session.on('close', () => {
+        socket.emit('terminal:closed', { terminalId })
+      })
+      socket.emit('terminal:ready', { terminalId })
+    } catch (err) {
+      console.error('[terminal] Create error:', err)
+      socket.emit('terminal:error', { terminalId, message: err.message })
+    }
+  })
+
+  socket.on('terminal:input', (data) => {
+    const { terminalId, input } = data
+    const session = getTerminal(terminalId)
+    if (session) session.write(input)
+  })
+
+  socket.on('terminal:resize', async (data) => {
+    const { terminalId, cols, rows } = data
+    const session = getTerminal(terminalId)
+    if (session) await session.resize(cols, rows)
+  })
+
+  socket.on('terminal:kill', async (data) => {
+    const { terminalId } = data
+    await killTerminal(terminalId)
+    if (socketTerminals.has(socket.id)) {
+      socketTerminals.get(socket.id).delete(terminalId)
+    }
+    socket.emit('terminal:closed', { terminalId })
+  })
+
+  socket.on("disconnect", async () => {
+    if (socketTerminals.has(socket.id)) {
+      const tIds = Array.from(socketTerminals.get(socket.id))
+      for (const tId of tIds) {
+        await killTerminal(tId).catch(() => {})
+      }
+      socketTerminals.delete(socket.id)
+    }
+
     const roomId = socket.data.roomId
     if (roomId && roomMembers.has(roomId)) {
       roomMembers.get(roomId).delete(socket.id)
