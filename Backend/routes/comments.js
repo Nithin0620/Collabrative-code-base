@@ -1,11 +1,11 @@
 import { Router } from "express"
 import Comment from "../models/Comment.js"
-import { authenticateToken } from "../middleware/auth.js"
+import { authenticateToken, requireRoomAccess } from "../middleware/auth.js"
 
 const router = Router()
 
 // Get all comments for a room
-router.get("/:roomId", authenticateToken, async (req, res) => {
+router.get("/:roomId", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const comments = await Comment.find({ roomId: req.params.roomId }).sort({ createdAt: -1 })
     res.json({ comments })
@@ -15,7 +15,7 @@ router.get("/:roomId", authenticateToken, async (req, res) => {
 })
 
 // Create a comment
-router.post("/:roomId", authenticateToken, async (req, res) => {
+router.post("/:roomId", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const { fileId, fileName, startLine, endLine, selectedText, author, avatar, color, text } = req.body
     const comment = await Comment.create({
@@ -37,7 +37,7 @@ router.post("/:roomId", authenticateToken, async (req, res) => {
 })
 
 // Delete a comment
-router.delete("/:roomId/:commentId", authenticateToken, async (req, res) => {
+router.delete("/:roomId/:commentId", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const comment = await Comment.findOne({ _id: req.params.commentId, roomId: req.params.roomId })
     if (!comment) return res.status(404).json({ message: "Comment not found" })
@@ -49,7 +49,7 @@ router.delete("/:roomId/:commentId", authenticateToken, async (req, res) => {
 })
 
 // Toggle resolve
-router.patch("/:roomId/:commentId/resolve", authenticateToken, async (req, res) => {
+router.patch("/:roomId/:commentId/resolve", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const comment = await Comment.findOne({ _id: req.params.commentId, roomId: req.params.roomId })
     if (!comment) return res.status(404).json({ message: "Comment not found" })
@@ -62,7 +62,7 @@ router.patch("/:roomId/:commentId/resolve", authenticateToken, async (req, res) 
 })
 
 // Add a reply
-router.post("/:roomId/:commentId/reply", authenticateToken, async (req, res) => {
+router.post("/:roomId/:commentId/reply", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const { author, avatar, color, text } = req.body
     const comment = await Comment.findOne({ _id: req.params.commentId, roomId: req.params.roomId })
@@ -76,7 +76,7 @@ router.post("/:roomId/:commentId/reply", authenticateToken, async (req, res) => 
 })
 
 // Toggle reaction on a comment
-router.post("/:roomId/:commentId/react", authenticateToken, async (req, res) => {
+router.post("/:roomId/:commentId/react", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const { emoji, author } = req.body
     const comment = await Comment.findOne({ _id: req.params.commentId, roomId: req.params.roomId })
@@ -103,7 +103,7 @@ router.post("/:roomId/:commentId/react", authenticateToken, async (req, res) => 
 })
 
 // Toggle reaction on a reply
-router.post("/:roomId/:commentId/reply/:replyId/react", authenticateToken, async (req, res) => {
+router.post("/:roomId/:commentId/reply/:replyId/react", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const { emoji, author } = req.body
     const comment = await Comment.findOne({ _id: req.params.commentId, roomId: req.params.roomId })

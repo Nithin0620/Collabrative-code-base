@@ -2,7 +2,7 @@ import { Router } from "express"
 import bcrypt from "bcryptjs"
 import Project from "../models/Project.js"
 import User from "../models/User.js"
-import { authenticateToken, requireProjectRole, getUserProjectRole } from "../middleware/auth.js"
+import { authenticateToken, requireProjectRole, getUserProjectRole, requireRoomAccess } from "../middleware/auth.js"
 
 const router = Router()
 
@@ -125,7 +125,7 @@ router.get("/:roomId", authenticateToken, async (req, res) => {
   }
 })
 
-router.post("/:roomId/save", authenticateToken, async (req, res) => {
+router.post("/:roomId/save", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const { fileTree, files, settings } = req.body
     const project = await Project.findOne({ roomId: req.params.roomId })
@@ -153,13 +153,18 @@ router.post("/:roomId/save", authenticateToken, async (req, res) => {
   }
 })
 
-router.post("/:roomId/snapshot", authenticateToken, async (req, res) => {
+router.post("/:roomId/snapshot", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const { data, label, message, author, authorAvatar, filesCount, fileNames } = req.body
 
     const project = await Project.findOne({ roomId: req.params.roomId })
     if (!project) {
       return res.status(404).json({ message: "Project not found" })
+    }
+
+    const role = getUserProjectRole(project, req.user._id.toString())
+    if (!role || role === "viewer") {
+      return res.status(403).json({ message: "Viewers cannot create snapshots" })
     }
 
     project.history.push({
@@ -178,7 +183,7 @@ router.post("/:roomId/snapshot", authenticateToken, async (req, res) => {
   }
 })
 
-router.get("/:roomId/history", authenticateToken, async (req, res) => {
+router.get("/:roomId/history", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const project = await Project.findOne({ roomId: req.params.roomId })
     if (!project) {
@@ -190,7 +195,7 @@ router.get("/:roomId/history", authenticateToken, async (req, res) => {
   }
 })
 
-router.delete("/:roomId/snapshot/:snapshotId", authenticateToken, async (req, res) => {
+router.delete("/:roomId/snapshot/:snapshotId", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const project = await Project.findOne({ roomId: req.params.roomId })
     if (!project) {
@@ -213,7 +218,7 @@ router.delete("/:roomId/snapshot/:snapshotId", authenticateToken, async (req, re
   }
 })
 
-router.get("/:roomId/members", authenticateToken, async (req, res) => {
+router.get("/:roomId/members", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const project = await Project.findOne({ roomId: req.params.roomId })
     if (!project) {

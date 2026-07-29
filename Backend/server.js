@@ -14,11 +14,11 @@ import authRoutes from "./routes/auth.js"
 import projectRoutes from "./routes/projects.js"
 import commentRoutes from "./routes/comments.js"
 import chatRoutes from "./routes/chat.js"
-import executeRoutes from "./routes/execute.js"
-import snippetRoutes from "./routes/snippets.js"
-import testCaseRoutes from "./routes/testCases.js"
+import executeRoutes, { setIO } from "./routes/execute.js"
 import { createWorker } from "./utils/execQueue.js"
 import { executeCode } from "./utils/sandboxRunner.js"
+import snippetRoutes from "./routes/snippets.js"
+import testCaseRoutes from "./routes/testCases.js"
 import User from "./models/User.js"
 import Project from "./models/Project.js"
 import { getUserProjectRole } from "./middleware/auth.js"
@@ -46,6 +46,9 @@ const io = new Server(httpServer, {
   },
 })
 
+setIO(io)
+createWorker(executeCode, io)
+
 io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token || socket.handshake.query?.token
   if (!token) {
@@ -65,8 +68,6 @@ io.use(async (socket, next) => {
 
 const ySocketIO = new YSocketIO(io)
 ySocketIO.initialize()
-
-createWorker(executeCode, io)
 
 app.use("/auth", authRoutes)
 app.use("/api/projects", projectRoutes)
@@ -109,39 +110,17 @@ const roomMembers = new Map()
 
 io.on("connection", (socket) => {
   socket.on("chat-message", (data) => {
-    socket.to(data.roomId).emit("chat-message", data)
-  })
-
-  // WebRTC Signaling
-  socket.on("webrtc-offer", (data) => {
-    if (data.to) {
-      socket.to(data.to).emit("webrtc-offer", { offer: data.offer, from: socket.id })
-    }
-  })
-
-  socket.on("webrtc-answer", (data) => {
-    if (data.to) {
-      socket.to(data.to).emit("webrtc-answer", { answer: data.answer, from: socket.id })
-    }
-  })
-
-  socket.on("webrtc-candidate", (data) => {
-    if (data.to) {
-      socket.to(data.to).emit("webrtc-candidate", { candidate: data.candidate, from: socket.id })
-    }
-  })
-
-  socket.on("webrtc-end", (data) => {
-    if (data.to) {
-      socket.to(data.to).emit("webrtc-end", { from: socket.id })
+    const roomId = socket.data.roomId
+    if (roomId) {
+      socket.to(roomId).emit("chat-message", data)
     }
   })
 
   // Real-Time Member Management
   socket.on("member-action", (data) => {
-    // data: { roomId, targetUserId, action: "kick" | "ban" | "role-update" | "settings-update" }
-    if (data.roomId) {
-      io.to(data.roomId).emit("member-action-event", data)
+    const roomId = socket.data.roomId
+    if (roomId) {
+      io.to(roomId).emit("member-action-event", data)
     }
   })
 
@@ -210,6 +189,10 @@ io.on("connection", (socket) => {
   })
 
   socket.on("get-room-members", (roomId, cb) => {
+    if (socket.data.roomId !== roomId) {
+      if (typeof cb === "function") cb({ members: [], selfId: socket.id })
+      return
+    }
     const members = Array.from(roomMembers.get(roomId) || [])
     if (typeof cb === "function") {
       cb({ members, selfId: socket.id })

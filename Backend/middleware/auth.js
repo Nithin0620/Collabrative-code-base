@@ -95,6 +95,45 @@ export function requireProjectRole(...allowedRoles) {
   }
 }
 
+export async function requireRoomAccess(req, res, next) {
+  try {
+    const project = await Project.findOne({ roomId: req.params.roomId })
+    if (!project) return next()
+
+    const userId = req.user._id.toString()
+
+    if (project.bannedUsers?.includes(userId)) {
+      return res.status(403).json({ message: "You are banned from this room" })
+    }
+
+    const isOwner = project.createdBy?.toString() === userId
+    let isMember = false
+    if (project.members) {
+      if (typeof project.members.has === "function") isMember = project.members.has(userId)
+      if (!isMember && typeof project.members.entries === "function") {
+        for (const [k] of project.members.entries()) {
+          if (k.toString() === userId) { isMember = true; break }
+        }
+      }
+    }
+
+    if (project.settings?.inviteOnly && !isOwner && !isMember) {
+      return res.status(403).json({ requiresInvite: true, message: "This room is invite-only" })
+    }
+
+    if (project.settings?.password && !isOwner) {
+      const pwdCookie = req.cookies?.["pwd_" + req.params.roomId]
+      if (pwdCookie !== "verified") {
+        return res.status(403).json({ requiresPassword: true, message: "Password required" })
+      }
+    }
+
+    next()
+  } catch {
+    res.status(500).json({ message: "Access check failed" })
+  }
+}
+
 export const generateToken = (userId) => {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "7d" })
 }

@@ -1,10 +1,21 @@
 import { Queue, Worker } from "bullmq"
 import { randomUUID } from "crypto"
 import Execution from "../models/Execution.js"
+import { dockerAvailable } from "./sandboxRunner.js"
 
 const QUEUE_NAME = "code-execution"
 
-const connection = { host: "127.0.0.1", port: 6379 }
+function getConnection() {
+  if (process.env.REDIS_URL) {
+    return { url: process.env.REDIS_URL }
+  }
+  if (process.env.UPSTASH_REDIS_URL) {
+    return { url: process.env.UPSTASH_REDIS_URL, tls: {} }
+  }
+  return { host: "127.0.0.1", port: 6379 }
+}
+
+const connection = getConnection()
 
 const execQueue = new Queue(QUEUE_NAME, {
   connection,
@@ -49,7 +60,7 @@ function createWorker(executeCode, io) {
             memory: result.memory,
             phase: result.phase,
             status: "completed",
-            sandboxed: result.sandboxed,
+            sandboxed: dockerAvailable,
           },
         )
 
@@ -61,7 +72,7 @@ function createWorker(executeCode, io) {
           time: result.time,
           memory: result.memory,
           phase: result.phase,
-          sandboxed: result.sandboxed,
+          sandboxed: dockerAvailable,
         })
 
         return { executionId, status: "completed" }
@@ -99,7 +110,7 @@ function createWorker(executeCode, io) {
 async function enqueueExecution({ userId, roomId, language, code, stdin }) {
   const executionId = randomUUID().slice(0, 12)
 
-  const execution = await Execution.create({
+  await Execution.create({
     executionId,
     userId,
     roomId: roomId || null,
@@ -125,10 +136,12 @@ async function enqueueExecution({ userId, roomId, language, code, stdin }) {
   return { executionId, status: "queued" }
 }
 
-async function stopJob(executionId) {
+async function stopJob(executionId, sandboxStopFn) {
   const job = await execQueue.getJob(executionId)
-  if (job) {
+  if (job && await job.isWaiting()) {
     await job.remove()
+  } else {
+    if (sandboxStopFn) await sandboxStopFn(executionId)
   }
   await Execution.findOneAndUpdate(
     { executionId },

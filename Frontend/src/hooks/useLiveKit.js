@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import {
   Room,
   RoomEvent,
@@ -27,7 +27,11 @@ export default function useLiveKit(socket, roomId, user) {
   audioEnabledRef.current = audioEnabled
   videoEnabledRef.current = videoEnabled
 
-  const userIdentity = user?.username || user?._id?.toString() || user?.id?.toString() || ""
+  const identityRef = useRef("lk-" + Math.random().toString(36).slice(2, 10))
+  const userIdentity = useMemo(
+    () => user?.username || user?._id?.toString() || user?.id?.toString() || identityRef.current,
+    [user],
+  )
 
   const updateRemoteStreams = useCallback(() => {
     if (!roomRef.current) return
@@ -149,10 +153,10 @@ export default function useLiveKit(socket, roomId, user) {
   }, [updateLocalStream, updateRemoteStreams])
 
   useEffect(() => {
-    if (!socket || !roomId || !user) return
+    if (!roomId || !user) return
     mountedRef.current = true
 
-    const identity = userIdentity || socket.id
+    const identity = userIdentity
     const name = userRef.current?.username || userRef.current?.displayName || "User"
 
     fetch("/api/livekit/token", {
@@ -189,7 +193,7 @@ export default function useLiveKit(socket, roomId, user) {
       setHandRaised(false)
       setConnectionState(ConnectionState.Disconnected)
     }
-  }, [socket, roomId, userIdentity, connectToRoom])
+  }, [roomId, userIdentity, connectToRoom])
 
   const toggleAudio = useCallback(async () => {
     try {

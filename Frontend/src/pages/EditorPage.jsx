@@ -767,6 +767,14 @@ export default function EditorPage({ roomId }) {
       chatSocket.emit("join-room", roomId)
     })
     chatSocket.on("room-error", (data) => {
+      if (data.requiresPassword) {
+        setNeedsPassword(true)
+        return
+      }
+      if (data.requiresInvite) {
+        setRoomAccessError(data.message || "This room is invite-only.")
+        return
+      }
       alert(data.message || "Access denied")
       navigate("/")
     })
@@ -1868,7 +1876,16 @@ export default function EditorPage({ roomId }) {
       {needsPassword && (
         <PasswordPrompt
           roomId={roomId}
-          onVerified={() => { setNeedsPassword(false); setPasswordVerified(true); fetchProject(); fetchMembers() }}
+          onVerified={() => {
+            setNeedsPassword(false)
+            setPasswordVerified(true)
+            fetchProject()
+            fetchMembers()
+            if (chatSocket) {
+              chatSocket.close()
+              chatSocket.connect()
+            }
+          }}
           onCancel={() => navigate("/")}
         />
       )}

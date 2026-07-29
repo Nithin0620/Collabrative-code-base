@@ -1,15 +1,15 @@
 import { Router } from "express"
-import { authenticateToken } from "../middleware/auth.js"
+import { authenticateToken, getUserProjectRole } from "../middleware/auth.js"
 import { stopExecution, dockerAvailable } from "../utils/sandboxRunner.js"
-import { enqueueExecution } from "../utils/execQueue.js"
+import { enqueueExecution, stopJob } from "../utils/execQueue.js"
 import Execution from "../models/Execution.js"
+import Project from "../models/Project.js"
 
 const router = Router()
 
-const LANGUAGES = ["javascript", "python", "java", "cpp", "c", "ruby", "go"]
+export function setIO(io) {}
 
-import Project from "../models/Project.js"
-import { getUserProjectRole } from "../middleware/auth.js"
+const LANGUAGES = ["javascript", "python", "java", "cpp", "c", "ruby", "go"]
 
 router.post("/", authenticateToken, async (req, res) => {
   try {
@@ -28,22 +28,26 @@ router.post("/", authenticateToken, async (req, res) => {
     if (roomId) {
       const project = await Project.findOne({ roomId })
       if (project) {
-        const role = getUserProjectRole(project, req.user._id.toString())
+        const userId = req.user._id.toString()
+        if (project.bannedUsers?.includes(userId)) {
+          return res.status(403).json({ message: "You are banned from this room" })
+        }
+        const role = getUserProjectRole(project, userId)
         if (!role || role === "viewer") {
           return res.status(403).json({ message: "Viewers cannot execute code" })
         }
       }
     }
 
-    const { executionId } = await enqueueExecution({
+    const result = await enqueueExecution({
       userId: req.user._id,
       roomId,
       language,
       code,
-      stdin,
+      stdin: stdin || "",
     })
 
-    res.json({ executionId, status: "queued" })
+    res.json(result)
   } catch (error) {
     console.error("Execute error:", error)
     res.status(500).json({ message: "Execution failed: " + error.message })
@@ -53,7 +57,7 @@ router.post("/", authenticateToken, async (req, res) => {
 router.post("/:executionId/stop", authenticateToken, async (req, res) => {
   try {
     const { executionId } = req.params
-    await stopExecution(executionId)
+    await stopJob(executionId, stopExecution)
     res.json({ stopped: true })
   } catch (error) {
     res.status(500).json({ message: "Failed to stop execution: " + error.message })

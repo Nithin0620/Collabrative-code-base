@@ -1,9 +1,10 @@
 import { Router } from "express"
 import Message from "../models/Message.js"
+import { authenticateToken, requireRoomAccess } from "../middleware/auth.js"
 
 const router = Router()
 
-router.get("/:roomId", async (req, res) => {
+router.get("/:roomId", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const { roomId } = req.params
     const limit = Math.min(parseInt(req.query.limit) || 50, 200)
@@ -24,7 +25,7 @@ router.get("/:roomId", async (req, res) => {
   }
 })
 
-router.post("/:roomId", async (req, res) => {
+router.post("/:roomId", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const { roomId } = req.params
     const { author, avatar, color, text } = req.body
@@ -48,7 +49,7 @@ router.post("/:roomId", async (req, res) => {
   }
 })
 
-router.delete("/:roomId/:messageId", async (req, res) => {
+router.delete("/:roomId/:messageId", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
     const { messageId } = req.params
     await Message.findByIdAndDelete(messageId)
