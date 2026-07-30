@@ -33,6 +33,7 @@ import RoleManager from "../components/RoleManager"
 import PasswordPrompt from "../components/PasswordPrompt"
 import ShareModal from "../components/ShareModal"
 import ShortcutsModal from "../components/ShortcutsModal"
+import SourceControlPanel from "../components/SourceControlPanel"
 import ToastNotification from "../components/ToastNotification"
 import { downloadFile, downloadProjectAsZip } from "../lib/download"
 
@@ -315,6 +316,7 @@ export default function EditorPage({ roomId }) {
   const [lastSavedTime, setLastSavedTime] = useState(null)
   const [isSnapshotting, setIsSnapshotting] = useState(false)
   const [statusContent, setStatusContent] = useState("")
+  const [showGit, setShowGit] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [showSnapshotDialog, setShowSnapshotDialog] = useState(false)
   const [diffSnapshot, setDiffSnapshot] = useState(null)
@@ -361,6 +363,61 @@ export default function EditorPage({ roomId }) {
     })
     return obj
   }, [yFileTree])
+
+  const loadProjectData = useCallback(async (overwrite = false) => {
+    try {
+      const res = await fetch("/api/projects/" + roomId, { credentials: "include" })
+      const data = await res.json()
+      if (data.requiresPassword) {
+        setNeedsPassword(true)
+        return
+      }
+      if (data.requiresInvite) {
+        setRoomAccessError("This room is invite-only. Please request an invitation from the room owner.")
+        return
+      }
+      if (!res.ok || !data.project) return
+
+      const project = data.project
+
+      ydoc.transact(() => {
+        if (project.fileTree) {
+          yFileTree.clear()
+          const entries = Object.entries(project.fileTree)
+          entries.forEach(([key, val]) => {
+            yFileTree.set(key, val)
+          })
+        }
+
+        if (project.files && Array.isArray(project.files)) {
+          project.files.forEach((f) => {
+            const text = ydoc.getText("file:" + f.id)
+            if (f.content) {
+              if (overwrite || text.toString() === "") {
+                text.delete(0, text.length)
+                text.insert(0, f.content)
+              }
+            }
+          })
+        }
+      })
+
+      if (project.settings) {
+        if (project.settings.theme) setTheme(project.settings.theme)
+        if (project.settings.fontSize) setFontSize(project.settings.fontSize)
+      }
+
+      const tree = {}
+      yFileTree.forEach((val, key) => { tree[key] = val })
+      const firstFile = Object.values(tree).find((item) => item.type === "file")
+      if (firstFile) {
+        setSelectedFileId(firstFile.id)
+        setOpenTabs([firstFile.id])
+      }
+    } catch (err) {
+      console.error("Failed to load project:", err)
+    }
+  }, [roomId, ydoc, yFileTree])
 
   const getFileContent = useCallback((fileId) => {
     return ydoc.getText("file:" + fileId).toString()
@@ -915,57 +972,6 @@ export default function EditorPage({ roomId }) {
       role: role || "editor",
     })
 
-    const loadProjectData = async () => {
-      try {
-        const res = await fetch("/api/projects/" + roomId, { credentials: "include" })
-        const data = await res.json()
-        if (data.requiresPassword) {
-          setNeedsPassword(true)
-          return
-        }
-        if (data.requiresInvite) {
-          setRoomAccessError("This room is invite-only. Please request an invitation from the room owner.")
-          return
-        }
-        if (!res.ok || !data.project) return
-
-        const project = data.project
-
-        ydoc.transact(() => {
-          if (project.fileTree) {
-            const entries = Object.entries(project.fileTree)
-            entries.forEach(([key, val]) => {
-              yFileTree.set(key, val)
-            })
-          }
-
-          if (project.files && Array.isArray(project.files)) {
-            project.files.forEach((f) => {
-              const text = ydoc.getText("file:" + f.id)
-              if (f.content && text.toString() === "") {
-                text.insert(0, f.content)
-              }
-            })
-          }
-        })
-
-        if (project.settings) {
-          if (project.settings.theme) setTheme(project.settings.theme)
-          if (project.settings.fontSize) setFontSize(project.settings.fontSize)
-        }
-
-        const tree = {}
-        yFileTree.forEach((val, key) => { tree[key] = val })
-        const firstFile = Object.values(tree).find((item) => item.type === "file")
-        if (firstFile) {
-          setSelectedFileId(firstFile.id)
-          setOpenTabs([firstFile.id])
-        }
-    } catch (err) {
-      console.error("Failed to load project:", err)
-    }
-  }
-
     loadProjectData()
 
     const activityEvents = ["mousemove", "click", "mousedown", "touchstart"]
@@ -1108,7 +1114,7 @@ export default function EditorPage({ roomId }) {
       const styleEl = document.getElementById("y-monaco-cursors")
       if (styleEl) styleEl.remove()
     }
-  }, [user, token, ydoc, yFileTree, roomId])
+  }, [user, token, ydoc, yFileTree, roomId, loadProjectData])
 
   const [roomAccessError, setRoomAccessError] = useState("")
 
@@ -1687,6 +1693,20 @@ export default function EditorPage({ roomId }) {
                   Gallery
                 </button>
                 <button
+                  onClick={() => { setShowChat(!showChat); if (!showChat) setShowComments(false) }}
+                  className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium transition-colors cursor-pointer ${
+                    showChat
+                      ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                      : "bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-600"
+                  }`}
+                  title="Chat"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                  Chat
+                </button>
+                <button
                   onClick={() => setShowShare(true)}
                   className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-gray-950 hover:bg-amber-400 transition-all duration-200 shadow-md hover:scale-[1.02] active:scale-95 cursor-pointer"
                   title="Share Room (QR Code, Copy Link & Social)"
@@ -1753,6 +1773,19 @@ export default function EditorPage({ roomId }) {
                 </svg>
               </button>
               <button
+                onClick={() => { setShowChat(!showChat); if (!showChat) setShowComments(false) }}
+                className={`p-1.5 rounded transition-colors cursor-pointer ${
+                  showChat
+                    ? "bg-amber-500/20 text-amber-400"
+                    : "text-gray-400 hover:bg-gray-800 hover:text-white"
+                }`}
+                title="Chat"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+              </button>
+              <button
                 onClick={() => setShowShare(true)}
                 className="p-1.5 rounded text-amber-400 hover:bg-amber-500/20 transition-colors cursor-pointer"
                 title="Share Room (QR Code & Social)"
@@ -1795,8 +1828,7 @@ export default function EditorPage({ roomId }) {
           onShowHistory={() => setShowHistory(true)}
           onToggleComments={() => { setShowComments(!showComments); if (!showComments) setShowChat(false) }}
           showComments={showComments}
-          onToggleChat={() => { setShowChat(!showChat); if (!showChat) setShowComments(false) }}
-          showChat={showChat}
+
           lastSaved={lastSavedTime ? new Date(lastSavedTime).toLocaleTimeString() : null}
           isSaving={isSaving}
           onRun={() => setShowRunner(true)}
@@ -1808,6 +1840,8 @@ export default function EditorPage({ roomId }) {
           onOpenShare={() => setShowShare(true)}
           showTerminal={showTerminal}
           onToggleTerminal={() => setShowTerminal(!showTerminal)}
+          showGit={showGit}
+          onToggleGit={() => { setShowGit(!showGit); if (!showGit) { setShowComments(false); setShowChat(false) } }}
         />
         <TabBar
           tabs={openTabs.map(id => ({
@@ -1916,6 +1950,13 @@ export default function EditorPage({ roomId }) {
           pendingPrefill={pendingPrefill}
           onPrefillConsumed={() => setPendingPrefill(null)}
           onCommentChanged={() => setCommentVersion((v) => v + 1)}
+        />
+      )}
+
+      {showGit && (
+        <SourceControlPanel
+          roomId={roomId}
+          onClose={() => setShowGit(false)}
         />
       )}
 

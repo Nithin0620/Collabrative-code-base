@@ -1,0 +1,323 @@
+import { Router } from "express"
+import simpleGit from "simple-git"
+import path from "path"
+import fs from "fs"
+import { authenticateToken, requireProjectRole } from "../middleware/auth.js"
+import { getProjectDir, syncProjectToDisk } from "../utils/projectSync.js"
+import User from "../models/User.js"
+import Project from "../models/Project.js"
+
+const router = Router()
+
+function getGit(roomId) {
+  const dir = getProjectDir(roomId)
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  return simpleGit(dir)
+}
+
+async function getGitWithToken(roomId, userId) {
+  const dir = getProjectDir(roomId)
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  const git = simpleGit(dir)
+  const user = await User.findById(userId).select('+githubToken')
+  if (user?.githubToken) {
+    const token = user.githubToken.replace(/"/g, '\\"')
+    await git.addConfig('credential.helper', 'store --file /tmp/.git-credentials-' + roomId)
+    fs.writeFileSync(`/tmp/.git-credentials-${roomId}`, `https://${user.username}:${token}@github.com\n`, 'utf-8')
+    try { fs.chmodSync(`/tmp/.git-credentials-${roomId}`, 0o600) } catch {}
+  }
+  return git
+}
+
+router.get("/:roomId/git/status", authenticateToken, requireProjectRole("owner", "editor", "viewer"), async (req, res) => {
+  try {
+    const git = getGit(req.params.roomId)
+    const isRepo = await git.checkIsRepo()
+    if (!isRepo) return res.json({ isRepo: false })
+    const status = await git.status()
+    res.json({ isRepo: true, status })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+router.get("/:roomId/git/log", authenticateToken, requireProjectRole("owner", "editor", "viewer"), async (req, res) => {
+  try {
+    const git = getGit(req.params.roomId)
+    const isRepo = await git.checkIsRepo()
+    if (!isRepo) return res.json({ isRepo: false, log: [] })
+    const log = await git.log({ maxCount: 50 })
+    res.json({ isRepo: true, log: log.all })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+router.get("/:roomId/git/branches", authenticateToken, requireProjectRole("owner", "editor", "viewer"), async (req, res) => {
+  try {
+    const git = getGit(req.params.roomId)
+    const isRepo = await git.checkIsRepo()
+    if (!isRepo) return res.json({ isRepo: false, branches: [], current: "" })
+    const branchSummary = await git.branch()
+    const branches = Object.entries(branchSummary.branches).map(([name, info]) => ({
+      name,
+      current: info.current,
+      label: info.label,
+    }))
+    res.json({ isRepo: true, branches, current: branchSummary.current })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+router.post("/:roomId/git/init", authenticateToken, requireProjectRole("owner", "editor"), async (req, res) => {
+  try {
+    await syncProjectToDisk(req.params.roomId)
+    const git = getGit(req.params.roomId)
+    await git.init()
+    await git.addConfig("user.name", req.user.username || "user")
+    await git.addConfig("user.email", req.user.email || "user@localhost")
+    res.json({ message: "Git repository initialized" })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+router.post("/:roomId/git/add", authenticateToken, requireProjectRole("owner", "editor"), async (req, res) => {
+  try {
+    const git = getGit(req.params.roomId)
+    await git.add(req.body.file || ".")
+    res.json({ message: "Staged" })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+router.post("/:roomId/git/commit", authenticateToken, requireProjectRole("owner", "editor"), async (req, res) => {
+  try {
+    const { message } = req.body
+    if (!message) return res.status(400).json({ message: "Commit message required" })
+    const git = getGit(req.params.roomId)
+    await git.add(".")
+    const result = await git.commit(message)
+    res.json({ message: "Committed", result })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+router.post("/:roomId/git/branch", authenticateToken, requireProjectRole("owner", "editor"), async (req, res) => {
+  try {
+    const { name, checkout } = req.body
+    if (!name) return res.status(400).json({ message: "Branch name required" })
+    const git = getGit(req.params.roomId)
+    await git.branch([name])
+    if (checkout) await git.checkout(name)
+    res.json({ message: `Branch ${name} created` })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+router.post("/:roomId/git/checkout", authenticateToken, requireProjectRole("owner", "editor"), async (req, res) => {
+  try {
+    const { name } = req.body
+    if (!name) return res.status(400).json({ message: "Branch name required" })
+    const git = getGit(req.params.roomId)
+    await git.checkout(name)
+    res.json({ message: `Switched to ${name}` })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+router.post("/:roomId/git/remote", authenticateToken, requireProjectRole("owner", "editor"), async (req, res) => {
+  try {
+    const { url } = req.body || {}
+    const git = getGit(req.params.roomId)
+    const remotes = await git.getRemotes(true)
+    if (url) {
+      if (remotes.find(r => r.name === 'origin')) {
+        await git.removeRemote('origin')
+      }
+      await git.addRemote('origin', url)
+      return res.json({ message: `Remote origin set to ${url}` })
+    }
+    res.json({ remotes })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+router.post("/:roomId/git/push", authenticateToken, requireProjectRole("owner", "editor"), async (req, res) => {
+  try {
+    const { remote = 'origin', branch } = req.body
+    const git = await getGitWithToken(req.params.roomId, req.user._id)
+    const branchSummary = await git.branch()
+    const pushBranch = branch || branchSummary.current
+    const result = await git.push(remote, pushBranch)
+    res.json({ message: `Pushed to ${remote}/${pushBranch}`, result })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+router.post("/:roomId/git/pull", authenticateToken, requireProjectRole("owner", "editor"), async (req, res) => {
+  try {
+    const { remote = 'origin', branch } = req.body
+    const git = await getGitWithToken(req.params.roomId, req.user._id)
+    const branchSummary = await git.branch()
+    const pullBranch = branch || branchSummary.current
+    await git.pull(remote, pullBranch)
+    res.json({ message: `Pulled from ${remote}/${pullBranch}` })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+function buildFileTreeFromDisk(dir) {
+  const entries = []
+  function walk(currentPath, parentId) {
+    let names
+    try { names = fs.readdirSync(currentPath) } catch { return }
+    for (const name of names) {
+      if (name.startsWith('.') || name === 'node_modules') continue
+      const fullPath = path.join(currentPath, name)
+      const stat = fs.statSync(fullPath)
+      const id = `disk-${entries.length}`
+      if (stat.isDirectory()) {
+        entries.push({ id, name, type: 'folder', parentId })
+        walk(fullPath, id)
+      } else {
+        const content = fs.readFileSync(fullPath, 'utf-8')
+        entries.push({ id, name, type: 'file', parentId, fileId: id, content })
+      }
+    }
+  }
+  walk(dir, null)
+  return entries
+}
+
+router.post("/:roomId/git/sync-from-disk", authenticateToken, requireProjectRole("owner", "editor"), async (req, res) => {
+  try {
+    const projectDir = getProjectDir(req.params.roomId)
+    if (!fs.existsSync(projectDir)) {
+      return res.status(404).json({ message: "No project files on disk" })
+    }
+
+    // Read current disk state and sync it back to MongoDB
+    const entries = buildFileTreeFromDisk(projectDir)
+    const fileTree = {}
+    const files = []
+
+    for (const entry of entries) {
+      fileTree[entry.id] = {
+        id: entry.id,
+        name: entry.name,
+        type: entry.type,
+        parentId: entry.parentId,
+      }
+      if (entry.type === 'file') {
+        fileTree[entry.id].fileId = entry.fileId
+        files.push({ id: entry.fileId, content: entry.content })
+      }
+    }
+
+    await Project.findOneAndUpdate(
+      { roomId: req.params.roomId },
+      { $set: { fileTree, files } }
+    )
+
+    const ySocketIO = req.app.get('ySocketIO')
+    const yDoc = ySocketIO?.documents.get(req.params.roomId)
+    if (yDoc) {
+      yDoc.transact(() => {
+        const yFileTree = yDoc.getMap('fileTree')
+        yFileTree.clear()
+        Object.entries(fileTree).forEach(([key, val]) => {
+          yFileTree.set(key, val)
+        })
+        files.forEach((f) => {
+          const text = yDoc.getText('file:' + f.id)
+          text.delete(0, text.length)
+          text.insert(0, f.content || '')
+        })
+      })
+    }
+
+    res.json({ message: "Project synced from disk", filesCount: files.length })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+router.post("/:roomId/git/clone", authenticateToken, requireProjectRole("owner"), async (req, res) => {
+  try {
+    const { repoUrl } = req.body
+    if (!repoUrl) return res.status(400).json({ message: "Repository URL required" })
+
+    const projectDir = getProjectDir(req.params.roomId)
+    if (fs.existsSync(projectDir)) {
+      fs.rmSync(projectDir, { recursive: true, force: true })
+    }
+    fs.mkdirSync(projectDir, { recursive: true })
+
+    // Convert SSH/HTTPS URL to authenticated HTTPS URL
+    const user = await User.findById(req.user._id).select('+githubToken')
+    let cloneUrl = repoUrl
+    if (user?.githubToken) {
+      const match = repoUrl.match(/github\.com[/:](.+?)(?:\.git)?$/)
+      if (match) {
+        cloneUrl = `https://${user.username}:${user.githubToken}@github.com/${match[1]}`
+      }
+    }
+
+    const git = simpleGit()
+    await git.clone(cloneUrl, projectDir)
+
+    const entries = buildFileTreeFromDisk(projectDir)
+    const fileTree = {}
+    const files = []
+
+    for (const entry of entries) {
+      fileTree[entry.id] = {
+        id: entry.id,
+        name: entry.name,
+        type: entry.type,
+        parentId: entry.parentId,
+      }
+      if (entry.type === 'file') {
+        fileTree[entry.id].fileId = entry.fileId
+        files.push({ id: entry.fileId, content: entry.content })
+      }
+    }
+
+    await Project.findOneAndUpdate(
+      { roomId: req.params.roomId },
+      { $set: { fileTree, files } }
+    )
+
+    const ySocketIO = req.app.get('ySocketIO')
+    const yDoc = ySocketIO?.documents.get(req.params.roomId)
+    if (yDoc) {
+      yDoc.transact(() => {
+        const yFileTree = yDoc.getMap('fileTree')
+        yFileTree.clear()
+        Object.entries(fileTree).forEach(([key, val]) => {
+          yFileTree.set(key, val)
+        })
+        files.forEach((f) => {
+          const text = yDoc.getText('file:' + f.id)
+          text.delete(0, text.length)
+          text.insert(0, f.content || '')
+        })
+      })
+    }
+
+    res.json({ message: `Cloned ${repoUrl}`, filesCount: files.length })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+export default router

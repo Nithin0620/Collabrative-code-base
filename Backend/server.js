@@ -20,6 +20,7 @@ import { executeCode } from "./utils/sandboxRunner.js"
 import snippetRoutes from "./routes/snippets.js"
 import testCaseRoutes from "./routes/testCases.js"
 import terminalRoutes from "./routes/terminal.js"
+import gitRoutes from "./routes/git.js"
 import { createTerminal, getTerminal, killTerminal } from "./utils/terminalManager.js"
 import User from "./models/User.js"
 import Project from "./models/Project.js"
@@ -117,6 +118,7 @@ const ySocketIO = new YSocketIO(io, {
   }
 })
 ySocketIO.initialize()
+app.set('ySocketIO', ySocketIO)
 
 // Enforce read-only and project role for Yjs document sync
 const yjsNsp = io.of(/^\/yjs\|.*$/)
@@ -152,6 +154,7 @@ app.use("/api/chat", chatRoutes)
 app.use("/api/execute", executeRoutes)
 app.use("/api/snippets", snippetRoutes)
 app.use("/api/testcases", testCaseRoutes)
+app.use("/api/projects", gitRoutes)
 app.use("/api/terminal", terminalRoutes)
 
 app.post("/api/livekit/token", async (req, res) => {
@@ -305,6 +308,7 @@ io.on("connection", (socket) => {
   socket.on('terminal:create', async (data) => {
     const { terminalId, cols = 80, rows = 24 } = data
     const roomId = socket.data.roomId
+    console.log(`[terminal] create: id=${terminalId} room=${roomId} socket=${socket.id}`)
     if (!socket.user || !roomId) {
       socket.emit('terminal:error', { terminalId, message: 'Not in a room' })
       return
@@ -321,9 +325,15 @@ io.on("connection", (socket) => {
         socket.emit('terminal:output', { terminalId, data: output })
       })
       session.on('close', () => {
+        console.log(`[terminal] session closed: id=${terminalId}`)
         socket.emit('terminal:closed', { terminalId })
       })
-      socket.emit('terminal:ready', { terminalId })
+      if (session.alive) {
+        console.log(`[terminal] ready: id=${terminalId}`)
+        socket.emit('terminal:ready', { terminalId })
+      } else {
+        console.log(`[terminal] session died during setup: id=${terminalId}`)
+      }
     } catch (err) {
       console.error('[terminal] Create error:', err)
       socket.emit('terminal:error', { terminalId, message: err.message })
@@ -344,16 +354,17 @@ io.on("connection", (socket) => {
 
   socket.on('terminal:kill', async (data) => {
     const { terminalId } = data
+    console.log(`[terminal] kill: id=${terminalId} socket=${socket.id}`)
     await killTerminal(terminalId)
     if (socketTerminals.has(socket.id)) {
       socketTerminals.get(socket.id).delete(terminalId)
     }
-    socket.emit('terminal:closed', { terminalId })
   })
 
   socket.on("disconnect", async () => {
     if (socketTerminals.has(socket.id)) {
       const tIds = Array.from(socketTerminals.get(socket.id))
+      console.log(`[terminal] disconnect cleaning ${tIds.length} terminals: ${tIds.join(',')}`)
       for (const tId of tIds) {
         await killTerminal(tId).catch(() => {})
       }

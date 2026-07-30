@@ -57,6 +57,10 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    githubToken: {
+      type: String,
+      select: false,
+    },
   },
   { timestamps: true }
 )

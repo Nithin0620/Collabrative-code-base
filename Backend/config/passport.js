@@ -90,6 +90,7 @@ export function configurePassport() {
             if (user) {
               user.githubId = profile.id
               user.avatar = profile.photos?.[0]?.value || user.avatar
+              user.githubToken = accessToken
               await user.save()
             } else {
               user = await User.create({
@@ -99,10 +100,12 @@ export function configurePassport() {
                 avatar: profile.photos?.[0]?.value || "",
                 color: hashToColor(profile.id),
                 isGuest: false,
+                githubToken: accessToken,
               })
             }
           } else {
             user.avatar = profile.photos?.[0]?.value || user.avatar
+            user.githubToken = accessToken
             await user.save()
           }
 

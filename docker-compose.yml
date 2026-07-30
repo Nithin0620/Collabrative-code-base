@@ -14,6 +14,13 @@ services:
     image: sandbox-runner:latest
     # This is a build-only service — the image is used by the API via dockerode
 
+  terminal-sandbox:
+    build:
+      context: ./Backend/sandbox
+      dockerfile: terminal.Dockerfile
+    image: opencode-terminal:latest
+    # Build-only service — the image is used on-demand by terminalManager.js via dockerode
+
   livekit:
     image: livekit/livekit-server:latest
     ports:

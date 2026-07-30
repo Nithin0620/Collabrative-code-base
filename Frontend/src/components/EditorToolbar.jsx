@@ -12,8 +12,6 @@ export default function EditorToolbar({
   onShowHistory,
   onToggleComments,
   showComments,
-  onToggleChat,
-  showChat,
   lastSaved,
   isSaving,
   onRun,
@@ -25,6 +23,8 @@ export default function EditorToolbar({
   onOpenShare,
   showTerminal,
   onToggleTerminal,
+  onToggleGit,
+  showGit,
 }) {
   const lang = filename ? getFileInfo(filename) : null
 
@@ -179,6 +179,20 @@ export default function EditorToolbar({
         <div className="w-px h-4 bg-gray-700" />
 
         <button
+          onClick={onToggleGit}
+          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer flex items-center gap-1 ${
+            showGit
+              ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+              : "bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-white"
+          }`}
+          title="Source Control"
+        >
+          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14v-4H8l4-4 4 4h-3v4h-2z"/>
+          </svg>
+          Git
+        </button>
+        <button
           onClick={onToggleTerminal}
           className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer flex items-center gap-1 ${
             showTerminal
@@ -202,16 +216,7 @@ export default function EditorToolbar({
         >
           Comments
         </button>
-        <button
-          onClick={onToggleChat}
-          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors cursor-pointer ${
-            showChat
-              ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
-              : "bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-white"
-          }`}
-        >
-          Chat
-        </button>
+
       </div>
     </div>
   )
