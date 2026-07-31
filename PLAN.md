@@ -24,15 +24,15 @@
 - [x] Git button in EditorToolbar
 - [x] Error/success toast messages inline
 
-## Phase 3 — GitHub Remote Integration
+## Phase 3 — GitHub Remote Integration ✓
 **Goal:** Push/pull/clone from GitHub
 
-- [ ] GitHub OAuth token plumbing (from existing Passport.js GitHub strategy)
-- [ ] `git clone <url>` — import GitHub repo as new project
-- [ ] Push/Pull buttons with progress indicators
-- [ ] Authentication handling (ssh keys / credential helper)
-- [ ] `git clone` endpoint that creates a new room from a GitHub URL
-- [ ] Commit history view (git log rendered in UI)
+- [x] GitHub OAuth token plumbing (from existing Passport.js GitHub strategy)
+- [x] `git clone <url>` — import GitHub repo as new project
+- [x] Push/Pull buttons with progress indicators
+- [x] Authentication handling (ssh keys / credential helper)
+- [x] `git clone` endpoint that creates a new room from a GitHub URL
+- [x] Commit history view (git log rendered in UI)
 
 ## Phase 4 — Git + Snapshot Coexistence & Polish
 **Goal:** Both versioning systems work together seamlessly

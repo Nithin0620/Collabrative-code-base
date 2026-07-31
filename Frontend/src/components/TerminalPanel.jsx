@@ -5,11 +5,18 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 
 // Single terminal instance
-function TerminalInstance({ terminalId, socket, isActive, onReady, onClose }) {
+function TerminalInstance({ terminalId, roomId, socket, isActive, onReady, onClose }) {
   const containerRef = useRef(null)
   const termRef = useRef(null)
   const fitAddonRef = useRef(null)
   const isReadyRef = useRef(false)
+  const [ports, setPorts] = useState({})
+
+  const requestPorts = useCallback(() => {
+    if (socket && isReadyRef.current) {
+      socket.emit('terminal:ports', { terminalId })
+    }
+  }, [socket, terminalId])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -78,6 +85,7 @@ function TerminalInstance({ terminalId, socket, isActive, onReady, onClose }) {
         isReadyRef.current = true
         term.writeln('\x1b[32m✓ Connected to sandbox\x1b[0m')
         term.writeln('')
+        requestPorts()
         if (onReady) onReady()
       }
     }
@@ -93,19 +101,26 @@ function TerminalInstance({ terminalId, socket, isActive, onReady, onClose }) {
         term.writeln(`\x1b[31m✗ Error: ${message}\x1b[0m`)
       }
     }
+    const onPorts = ({ terminalId: tid, ports: p }) => {
+      if (tid === terminalId) setPorts(p || {})
+    }
 
     if (socket) {
       socket.on('terminal:output', onOutput)
       socket.on('terminal:ready', onReady_)
       socket.on('terminal:closed', onClosed)
       socket.on('terminal:error', onError)
+      socket.on('terminal:ports', onPorts)
     }
+
+    // Poll for active dev-server ports while the terminal is open
+    const portPoll = setInterval(() => requestPorts(), 5000)
 
     // Create terminal session on server
     const cols = term.cols
     const rows = term.rows
     if (socket) {
-      socket.emit('terminal:create', { terminalId, cols, rows })
+      socket.emit('terminal:create', { terminalId, roomId, cols, rows })
     }
 
     // Handle resize
@@ -120,18 +135,20 @@ function TerminalInstance({ terminalId, socket, isActive, onReady, onClose }) {
     resizeObserver.observe(containerRef.current)
 
     return () => {
+      clearInterval(portPoll)
       if (socket) {
         socket.off('terminal:output', onOutput)
         socket.off('terminal:ready', onReady_)
         socket.off('terminal:closed', onClosed)
         socket.off('terminal:error', onError)
+        socket.off('terminal:ports', onPorts)
         socket.emit('terminal:kill', { terminalId })
       }
       resizeObserver.disconnect()
       term.dispose()
       isReadyRef.current = false
     }
-  }, [terminalId, socket])
+  }, [terminalId, roomId, socket, requestPorts])
 
   // Focus when active
   useEffect(() => {
@@ -140,17 +157,47 @@ function TerminalInstance({ terminalId, socket, isActive, onReady, onClose }) {
     }
   }, [isActive])
 
+  const portEntries = Object.entries(ports)
+  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
+
   return (
     <div
-      ref={containerRef}
-      className="flex-1 overflow-hidden"
-      style={{ display: isActive ? 'flex' : 'none', flexDirection: 'column' }}
-    />
+      className="flex-1 overflow-hidden flex flex-col"
+      style={{ display: isActive ? 'flex' : 'none' }}
+    >
+      <div ref={containerRef} className="flex-1 overflow-hidden" />
+      {portEntries.length > 0 && (
+        <div className="shrink-0 flex items-center gap-2 px-2 py-1 border-t border-gray-700 bg-gray-900/80 overflow-x-auto">
+          <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest shrink-0">
+            Ports
+          </span>
+          {portEntries.map(([cPort, hPort]) => {
+            const url = `http://${host}:${hPort}`
+            return (
+              <a
+                key={cPort}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-gray-800 text-green-400 hover:bg-green-500/10 hover:text-green-300 border border-gray-700 hover:border-green-500/40 transition-colors cursor-pointer shrink-0"
+                title={`Open port ${cPort}`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shrink-0" />
+                <span>{cPort}</span>
+                <svg className="w-2.5 h-2.5 opacity-60 group-hover:opacity-100" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </a>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
 // Multi-terminal panel
-export default function TerminalPanel({ socket, onClose, onHeightChange }) {
+export default function TerminalPanel({ socket, roomId, visible = true, onClose, onHeightChange }) {
   const [terminals, setTerminals] = useState([{ id: 'term-1', label: 'bash' }])
   const [activeTermId, setActiveTermId] = useState('term-1')
   const [counter, setCounter] = useState(2)
@@ -169,10 +216,9 @@ export default function TerminalPanel({ socket, onClose, onHeightChange }) {
     socket?.emit('terminal:kill', { terminalId: id })
     setTerminals((prev) => {
       const next = prev.filter((t) => t.id !== id)
-      if (activeTermId === id && next.length > 0) {
-        setActiveTermId(next[next.length - 1].id)
+      if (activeTermId === id) {
+        setActiveTermId(next.length > 0 ? next[next.length - 1].id : null)
       }
-      if (next.length === 0) onClose?.()
       return next
     })
   }, [activeTermId, socket, onClose])
@@ -206,7 +252,7 @@ export default function TerminalPanel({ socket, onClose, onHeightChange }) {
     <div
       ref={panelRef}
       className="flex flex-col bg-gray-950 border-t border-gray-700 shrink-0"
-      style={{ height: panelHeight }}
+      style={{ height: panelHeight, display: visible ? 'flex' : 'none' }}
     >
       {/* Drag handle */}
       <div
@@ -269,15 +315,33 @@ export default function TerminalPanel({ socket, onClose, onHeightChange }) {
 
       {/* Terminal instances */}
       <div className="flex-1 overflow-hidden flex flex-col p-1">
-        {terminals.map((t) => (
-          <TerminalInstance
-            key={t.id}
-            terminalId={t.id}
-            socket={socket}
-            isActive={activeTermId === t.id}
-            onClose={() => closeTerminal(t.id)}
-          />
-        ))}
+        {terminals.length === 0 ? (
+          <div className="flex-1 flex items-center justify-center px-4 text-center text-gray-500">
+            <div className="space-y-3 max-w-sm">
+              <p className="text-sm text-gray-300">No terminals are open</p>
+              <p className="text-xs leading-5">
+                Create a new shell tab to run commands inside the live project workspace.
+              </p>
+              <button
+                onClick={addTerminal}
+                className="px-3 py-1.5 rounded bg-amber-500 text-gray-950 text-xs font-semibold hover:bg-amber-400 transition-colors cursor-pointer"
+              >
+                New Terminal
+              </button>
+            </div>
+          </div>
+        ) : (
+          terminals.map((t) => (
+            <TerminalInstance
+              key={t.id}
+              terminalId={t.id}
+              roomId={roomId}
+              socket={socket}
+              isActive={activeTermId === t.id}
+              onClose={() => closeTerminal(t.id)}
+            />
+          ))
+        )}
       </div>
     </div>
   )

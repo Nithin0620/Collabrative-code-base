@@ -7,7 +7,7 @@ import { SocketIOProvider } from "y-socket.io"
 import { io } from "socket.io-client"
 import { useAuth } from "../hooks/useAuth"
 import { saveRoom } from "../lib/rooms"
-import { getFileInfo, generateId } from "../lib/fileTree"
+import { getFileInfo, generateId, filterIgnoredTree } from "../lib/fileTree"
 import { defineCustomThemes } from "../lib/themes"
 import FileExplorer from "../components/FileExplorer"
 import EditorToolbar from "../components/EditorToolbar"
@@ -227,8 +227,15 @@ export default function EditorPage({ roomId }) {
   const [selectedFileId, setSelectedFileId] = useState(null)
   const [openTabs, setOpenTabs] = useState([])
   const [showTerminal, setShowTerminal] = useState(false)
+  const [terminalPanelMounted, setTerminalPanelMounted] = useState(false)
 
   const previewFileIdRef = useRef(null)
+
+  useEffect(() => {
+    if (showTerminal) {
+      setTerminalPanelMounted(true)
+    }
+  }, [showTerminal])
 
   const openTab = useCallback((fileId) => {
     setOpenTabs((prev) => {
@@ -380,17 +387,24 @@ export default function EditorPage({ roomId }) {
 
       const project = data.project
 
+      let projectFileTree = project.fileTree || {}
+      let projectFiles = project.files || []
+      if (project.fileTree) {
+        const filtered = filterIgnoredTree(projectFileTree, projectFiles)
+        projectFileTree = filtered.fileTree
+        projectFiles = filtered.files
+      }
+
       ydoc.transact(() => {
-        if (project.fileTree) {
+        if (projectFileTree) {
           yFileTree.clear()
-          const entries = Object.entries(project.fileTree)
-          entries.forEach(([key, val]) => {
+          Object.entries(projectFileTree).forEach(([key, val]) => {
             yFileTree.set(key, val)
           })
         }
 
-        if (project.files && Array.isArray(project.files)) {
-          project.files.forEach((f) => {
+        if (projectFiles && Array.isArray(projectFiles)) {
+          projectFiles.forEach((f) => {
             const text = ydoc.getText("file:" + f.id)
             if (f.content) {
               if (overwrite || text.toString() === "") {
@@ -1839,7 +1853,10 @@ export default function EditorPage({ roomId }) {
           readOnly={!canEdit}
           onOpenShare={() => setShowShare(true)}
           showTerminal={showTerminal}
-          onToggleTerminal={() => setShowTerminal(!showTerminal)}
+          onToggleTerminal={() => {
+            setTerminalPanelMounted(true)
+            setShowTerminal((prev) => !prev)
+          }}
           showGit={showGit}
           onToggleGit={() => { setShowGit(!showGit); if (!showGit) { setShowComments(false); setShowChat(false) } }}
         />
@@ -1916,10 +1933,11 @@ export default function EditorPage({ roomId }) {
               </div>
             )}
           </div>
-          {showTerminal && (
+          {terminalPanelMounted && (
             <TerminalPanel
               socket={chatSocket}
               roomId={roomId}
+              visible={showTerminal}
               onClose={() => setShowTerminal(false)}
             />
           )}

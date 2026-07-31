@@ -21,7 +21,8 @@ export default function SourceControlPanel({ roomId, onClose }) {
   const [showRemote, setShowRemote] = useState(false)
   const [pushing, setPushing] = useState(false)
   const [pulling, setPulling] = useState(false)
-  const [syncing, setSyncing] = useState(false)
+  const [syncingToDisk, setSyncingToDisk] = useState(false)
+  const [syncingFromDisk, setSyncingFromDisk] = useState(false)
   const [cloneUrl, setCloneUrl] = useState("")
   const [cloning, setCloning] = useState(false)
 
@@ -156,17 +157,35 @@ export default function SourceControlPanel({ roomId, onClose }) {
     setPulling(false)
   }
 
-  const handleSyncFromDisk = async () => {
-    setSyncing(true)
+  const handleSyncToDisk = async () => {
+    setSyncingToDisk(true)
     setError("")
     try {
-      const res = await fetch(`/api/projects/${roomId}/git/sync-from-disk`, {
+      const r = await fetch(`/api/projects/${roomId}/sync/to-disk`, {
         method: "POST",
         credentials: "include",
-      }).then(r => r.json())
-      if (res.message) showSuccess(res.message)
+      })
+      const res = await r.json()
+      if (r.ok && res.success) showSuccess(res.message || "Synced to disk")
+      else setError(res.message || "Failed to sync to disk")
     } catch (e) { setError(e.message) }
-    setSyncing(false)
+    setSyncingToDisk(false)
+  }
+
+  const handleSyncFromDisk = async () => {
+    setSyncingFromDisk(true)
+    setError("")
+    try {
+      const r = await fetch(`/api/projects/${roomId}/sync/to-editor`, {
+        method: "POST",
+        credentials: "include",
+      })
+      const res = await r.json()
+      if (r.ok && res.success) showSuccess(res.message || "Synced to editor")
+      else setError(res.message || "Failed to sync to editor")
+      await fetchStatus()
+    } catch (e) { setError(e.message) }
+    setSyncingFromDisk(false)
   }
 
   const handleClone = async () => {
@@ -341,14 +360,26 @@ export default function SourceControlPanel({ roomId, onClose }) {
               </div>
             </div>
 
-            <div className="border-t border-gray-700 pt-2 px-1">
-              <button
-                onClick={handleSyncFromDisk}
-                disabled={syncing}
-                className="w-full py-1 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 text-[10px] font-medium rounded transition-colors cursor-pointer"
-              >
-                {syncing ? "Syncing..." : "Sync from Disk → Editor"}
-              </button>
+            <div className="border-t border-gray-700 pt-2 px-1 space-y-1.5">
+              <p className="text-[10px] text-gray-500 font-semibold uppercase">Filesystem Sync</p>
+              <div className="flex gap-1">
+                <button
+                  onClick={handleSyncToDisk}
+                  disabled={syncingToDisk}
+                  className="flex-1 py-1 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 text-[10px] font-medium rounded transition-colors cursor-pointer"
+                  title="Write the editor state to the project filesystem (and stage it for git)"
+                >
+                  {syncingToDisk ? "Syncing..." : "Sync Editor → Disk"}
+                </button>
+                <button
+                  onClick={handleSyncFromDisk}
+                  disabled={syncingFromDisk}
+                  className="flex-1 py-1 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 text-[10px] font-medium rounded transition-colors cursor-pointer"
+                  title="Load the project filesystem state back into the editor"
+                >
+                  {syncingFromDisk ? "Syncing..." : "Sync Disk → Editor"}
+                </button>
+              </div>
             </div>
 
             <div className="border-t border-gray-700 pt-2 px-1 space-y-1.5">

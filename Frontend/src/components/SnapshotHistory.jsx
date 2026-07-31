@@ -56,6 +56,8 @@ export default function SnapshotHistory({
   const [undoTimeTo, setUndoTimeTo] = useState("")
   const [showUndoPanel, setShowUndoPanel] = useState(false)
   const [viewMode, setViewMode] = useState("list")
+  const [gitCommits, setGitCommits] = useState([])
+  const [gitInfo, setGitInfo] = useState(null)
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -65,6 +67,8 @@ export default function SnapshotHistory({
         })
         const data = await res.json()
         setHistory((data.history || []).slice().reverse())
+        setGitCommits(data.gitCommits || [])
+        setGitInfo(data.gitInfo || null)
       } catch {
         console.error("Failed to load history")
       } finally {
@@ -195,6 +199,19 @@ export default function SnapshotHistory({
             <h2 className="text-sm font-bold text-white">Version History</h2>
             {!loading && history.length > 0 && (
               <span className="text-[11px] text-gray-500 bg-gray-700 px-1.5 py-0.5 rounded">{filteredHistory.length}</span>
+            )}
+            {gitInfo?.hasRepo && gitInfo.branch && (
+              <span
+                className="text-[10px] font-mono text-green-400 bg-green-500/10 border border-green-500/20 px-1.5 py-0.5 rounded"
+                title="Git repository detected"
+              >
+                {gitInfo.branch}
+              </span>
+            )}
+            {!loading && gitInfo?.hasRepo && (
+              <span className="text-[10px] text-gray-500 bg-gray-700/70 px-1.5 py-0.5 rounded">
+                {gitCommits.length} git commit{gitCommits.length !== 1 ? "s" : ""}
+              </span>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -423,6 +440,29 @@ export default function SnapshotHistory({
             </div>
           ) : (
             <div className="space-y-2">
+              {gitCommits.length > 0 && (
+                <div className="mb-4">
+                  <p className="text-[10px] text-green-400/80 font-semibold uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14v-4H8l4-4 4 4h-3v4h-2z"/>
+                    </svg>
+                    Git Commits
+                  </p>
+                  <div className="space-y-1.5">
+                    {gitCommits.map((c, i) => (
+                      <div key={i} className="rounded-lg bg-gray-900 border border-gray-700 p-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono text-green-400 shrink-0">{String(c.hash || "").slice(0, 7)}</span>
+                          <span className="text-xs text-gray-200 truncate flex-1">{c.message}</span>
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-0.5 truncate">
+                          {c.author} · {formatDate(c.date)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {filteredHistory.map((snapshot, index) => (
                 <div
                   key={snapshot._id}
@@ -443,6 +483,14 @@ export default function SnapshotHistory({
                           {snapshot.filesCount > 0 && (
                             <span className="text-[11px] text-gray-500">
                               {snapshot.filesCount} file{snapshot.filesCount !== 1 ? "s" : ""}
+                            </span>
+                          )}
+                          {snapshot.gitCommit && (
+                            <span
+                              className="text-[10px] font-mono text-green-400/80 bg-green-500/10 px-1.5 py-0.5 rounded"
+                              title={"Backed by git commit " + snapshot.gitCommit}
+                            >
+                              {snapshot.gitCommit.slice(0, 7)}
                             </span>
                           )}
                         </div>

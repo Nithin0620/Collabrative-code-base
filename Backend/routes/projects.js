@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs"
 import Project from "../models/Project.js"
 import User from "../models/User.js"
 import { authenticateToken, requireProjectRole, getUserProjectRole, requireRoomAccess } from "../middleware/auth.js"
+import { syncProjectToDisk, readProjectFromDisk, commitProjectToGit, getHiddenPaths, getRecentGitCommits } from "../utils/projectSync.js"
 
 const router = Router()
 
@@ -147,6 +148,10 @@ router.post("/:roomId/save", authenticateToken, requireRoomAccess, async (req, r
       { new: true }
     )
 
+    await syncProjectToDisk(req.params.roomId).catch((err) => {
+      console.warn("[projects] Disk sync after save failed:", err.message)
+    })
+
     res.json({ success: true, updatedAt: updated.updatedAt })
   } catch (error) {
     res.status(500).json({ message: "Failed to save project" })
@@ -167,17 +172,31 @@ router.post("/:roomId/snapshot", authenticateToken, requireRoomAccess, async (re
       return res.status(403).json({ message: "Viewers cannot create snapshots" })
     }
 
+    // Back the snapshot with a git commit so it is recoverable from both histories
+    let gitCommit = null
+    try {
+      await syncProjectToDisk(req.params.roomId)
+      gitCommit = await commitProjectToGit(
+        req.params.roomId,
+        `${label ? label + ": " : ""}${message || "Snapshot"}`,
+        { name: req.user.username || author || "user", email: req.user.email || "user@localhost" }
+      )
+    } catch (err) {
+      console.warn("[snapshot] git backup failed:", err.message)
+    }
+
     project.history.push({
       data, label: label || "", message: message || "",
       author: author || "", authorAvatar: authorAvatar || "",
       filesCount: filesCount || 0, fileNames: fileNames || [],
+      gitCommit: gitCommit || null,
     })
     if (project.history.length > 20) {
       project.history = project.history.slice(-20)
     }
     await project.save()
 
-    res.json({ success: true, history: project.history })
+    res.json({ success: true, history: project.history, gitCommit })
   } catch (error) {
     res.status(500).json({ message: "Failed to save snapshot" })
   }
@@ -189,9 +208,87 @@ router.get("/:roomId/history", authenticateToken, requireRoomAccess, async (req,
     if (!project) {
       return res.status(404).json({ message: "Project not found" })
     }
-    res.json({ history: project.history })
+    let gitCommits = []
+    let gitInfo = null
+    try {
+      gitCommits = await getRecentGitCommits(req.params.roomId)
+      if (gitCommits.length > 0) {
+        gitInfo = {
+          branch: await getCurrentBranch(req.params.roomId),
+          hasRepo: true,
+        }
+      }
+    } catch {}
+    res.json({ history: project.history, gitCommits, gitInfo })
   } catch (error) {
     res.status(500).json({ message: "Failed to load history" })
+  }
+})
+
+router.get("/:roomId/hidden-paths", authenticateToken, requireRoomAccess, async (req, res) => {
+  try {
+    res.json({ hiddenPaths: getHiddenPaths(req.params.roomId) })
+  } catch (error) {
+    res.status(500).json({ message: "Failed to load hidden paths" })
+  }
+})
+
+router.post("/:roomId/sync/to-disk", authenticateToken, requireRoomAccess, async (req, res) => {
+  try {
+    const project = await Project.findOne({ roomId: req.params.roomId })
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" })
+    }
+    const role = getUserProjectRole(project, req.user._id.toString())
+    if (!role || role === "viewer") {
+      return res.status(403).json({ message: "Viewers cannot sync to disk" })
+    }
+
+    await syncProjectToDisk(req.params.roomId)
+    res.json({
+      success: true,
+      message: "Editor state synced to disk",
+      filesCount: project.files?.length || 0,
+    })
+  } catch (error) {
+    res.status(500).json({ message: "Failed to sync to disk" })
+  }
+})
+
+router.post("/:roomId/sync/to-editor", authenticateToken, requireRoomAccess, async (req, res) => {
+  try {
+    const { fileTree, files } = readProjectFromDisk(req.params.roomId)
+
+    await Project.findOneAndUpdate(
+      { roomId: req.params.roomId },
+      { $set: { fileTree, files, updatedAt: new Date() } }
+    )
+
+    const ySocketIO = req.app.get('ySocketIO')
+    const yDoc = ySocketIO?.documents.get(req.params.roomId)
+    if (yDoc) {
+      yDoc.transact(() => {
+        const yFileTree = yDoc.getMap('fileTree')
+        yFileTree.clear()
+        Object.entries(fileTree).forEach(([key, val]) => {
+          yFileTree.set(key, val)
+        })
+        files.forEach((f) => {
+          const text = yDoc.getText('file:' + f.id)
+          text.delete(0, text.length)
+          text.insert(0, f.content || '')
+        })
+      })
+    }
+
+    res.json({
+      success: true,
+      message: "Disk state synced to editor",
+      filesCount: files.length,
+      hiddenPaths: getHiddenPaths(req.params.roomId),
+    })
+  } catch (error) {
+    res.status(500).json({ message: "Failed to sync to editor" })
   }
 })
 

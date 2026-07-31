@@ -72,3 +72,35 @@ export function buildFlatTree(fileTree) {
 export function getDefaultFilename() {
   return "untitled.txt"
 }
+
+const EDITOR_EXCLUDED_DIRS = new Set(["node_modules", ".git", ".DS_Store"])
+
+export function filterIgnoredTree(fileTree, files) {
+  const entries = Object.values(fileTree || {})
+  if (entries.length === 0) return { fileTree: {}, files: files || [] }
+
+  const childrenMap = {}
+  entries.forEach((e) => {
+    const key = e.parentId || "__root__"
+    if (!childrenMap[key]) childrenMap[key] = []
+    childrenMap[key].push(e)
+  })
+
+  const dropped = new Set()
+  const markDrop = (item) => {
+    dropped.add(item.id)
+    ;(childrenMap[item.id] || []).forEach(markDrop)
+  }
+  entries.forEach((e) => {
+    if (EDITOR_EXCLUDED_DIRS.has(e.name)) markDrop(e)
+  })
+
+  const filtered = {}
+  entries.forEach((e) => {
+    if (!dropped.has(e.id)) filtered[e.id] = e
+  })
+
+  const kept = new Set(Object.keys(filtered))
+  const filteredFiles = (files || []).filter((f) => kept.has(f.id))
+  return { fileTree: filtered, files: filteredFiles }
+}

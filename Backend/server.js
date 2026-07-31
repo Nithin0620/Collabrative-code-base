@@ -35,7 +35,7 @@ app.use(cors({
   origin: process.env.CLIENT_URL,
   credentials: true,
 }))
-app.use(express.json())
+app.use(express.json({ limit: "50mb" }))
 app.use(cookieParser())
 app.use(passport.initialize())
 
@@ -307,10 +307,17 @@ io.on("connection", (socket) => {
   // ---- TERMINAL HANDLERS ----
   socket.on('terminal:create', async (data) => {
     const { terminalId, cols = 80, rows = 24 } = data
-    const roomId = socket.data.roomId
+    const sanitize = (id) => String(id || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 64)
+    const clientRoomId = sanitize(data.roomId)
+    const joinedRoomId = sanitize(socket.data.roomId)
+    const roomId = joinedRoomId || clientRoomId
     console.log(`[terminal] create: id=${terminalId} room=${roomId} socket=${socket.id}`)
     if (!socket.user || !roomId) {
       socket.emit('terminal:error', { terminalId, message: 'Not in a room' })
+      return
+    }
+    if (joinedRoomId && clientRoomId && joinedRoomId !== clientRoomId) {
+      socket.emit('terminal:error', { terminalId, message: 'Room mismatch' })
       return
     }
     try {
@@ -352,6 +359,13 @@ io.on("connection", (socket) => {
     if (session) await session.resize(cols, rows)
   })
 
+  socket.on('terminal:ports', async ({ terminalId }) => {
+    const session = getTerminal(terminalId)
+    if (!session) return
+    const ports = await session.getActivePorts()
+    socket.emit('terminal:ports', { terminalId, ports })
+  })
+
   socket.on('terminal:kill', async (data) => {
     const { terminalId } = data
     console.log(`[terminal] kill: id=${terminalId} socket=${socket.id}`)
@@ -387,6 +401,15 @@ app.get("/health", (req, res) => {
 })
 
 app.use(express.static("public"))
+
+httpServer.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[server] Port ${process.env.PORT || 3000} is already in use.`)
+    console.error(`[server] Run: pkill -9 -f 'node server.js' && npm run dev`)
+    process.exit(1)
+  }
+  throw err
+})
 
 httpServer.listen(process.env.PORT || 3000, () => {
   console.log(`Server is running on port ${process.env.PORT || 3000}`)

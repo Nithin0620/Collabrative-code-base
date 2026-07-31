@@ -14,6 +14,7 @@ const snapshotSchema = new mongoose.Schema({
   authorAvatar: { type: String, default: "" },
   filesCount: { type: Number, default: 0 },
   fileNames: { type: [String], default: [] },
+  gitCommit: { type: String, default: "" },
   timestamp: { type: Date, default: Date.now },
 })
 

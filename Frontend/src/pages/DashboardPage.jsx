@@ -19,6 +19,11 @@ function UserAvatar({ user }) {
   )
 }
 
+function repoNameFromUrl(url) {
+  const m = url.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/)
+  return m ? m[2] : ""
+}
+
 export default function DashboardPage() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -27,6 +32,9 @@ export default function DashboardPage() {
   const [editingId, setEditingId] = useState(null)
   const [editName, setEditName] = useState("")
   const [search, setSearch] = useState("")
+  const [cloneUrl, setCloneUrl] = useState("")
+  const [cloning, setCloning] = useState(false)
+  const [cloneError, setCloneError] = useState("")
 
   useEffect(() => {
     setRooms(getRooms())
@@ -45,6 +53,29 @@ export default function DashboardPage() {
     navigate(`/room/${code}`)
     setJoinCode("")
   }, [joinCode, navigate])
+
+  const cloneFromGithub = useCallback(async () => {
+    const url = cloneUrl.trim()
+    if (!url) return
+    setCloning(true)
+    setCloneError("")
+    try {
+      const res = await fetch("/api/projects/clone-from-github", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repoUrl: url }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.message || "Clone failed")
+      const name = repoNameFromUrl(url)
+      saveRoom({ id: data.roomId, name })
+      navigate(`/room/${data.roomId}`)
+    } catch (e) {
+      setCloneError(e.message)
+      setCloning(false)
+    }
+  }, [cloneUrl, navigate])
 
   const openRoom = useCallback((id) => {
     saveRoom({ id })
@@ -129,6 +160,32 @@ export default function DashboardPage() {
             </button>
           </div>
         </div>
+
+        <div className="flex flex-col sm:flex-row gap-4 mb-8">
+          <div className="flex flex-1 max-w-md">
+            <input
+              type="text"
+              value={cloneUrl}
+              onChange={(e) => setCloneUrl(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && cloneFromGithub()}
+              placeholder="Clone from GitHub... https://github.com/user/repo"
+              className="flex-1 px-4 py-3 rounded-l-xl bg-gray-900 border border-gray-700 border-r-0 text-white text-sm placeholder-gray-500 focus:outline-none focus:border-amber-500"
+            />
+            <button
+              onClick={cloneFromGithub}
+              disabled={cloning || !cloneUrl.trim()}
+              className="px-5 py-3 rounded-r-xl bg-gray-800 text-gray-300 text-sm font-semibold border border-gray-700 hover:bg-gray-700 hover:text-white disabled:opacity-50 transition-colors cursor-pointer"
+            >
+              {cloning ? "Cloning..." : "Clone"}
+            </button>
+          </div>
+        </div>
+
+        {cloneError && (
+          <div className="max-w-md mb-8 px-4 py-3 rounded-xl bg-red-900/30 border border-red-800 text-red-400 text-sm">
+            {cloneError}
+          </div>
+        )}
 
         <div className="mb-6">
           <div className="relative">

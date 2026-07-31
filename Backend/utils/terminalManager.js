@@ -15,6 +15,40 @@ const TERMINAL_IMAGE = 'opencode-terminal:latest'
 const DOCKERFILE_PATH = path.resolve(__dirname, '../sandbox/terminal.Dockerfile')
 const CONTAINER_LABEL = 'opencode-terminal'
 
+// Container ports we expose, mapped to unique host ports per container so the
+// user's own dev servers (VS Code, etc.) never clash.
+const EXPOSED_CONTAINER_PORTS = [3000, 5173, 4173, 5174, 8080, 8000]
+const HOST_PORT_BASE = 24000
+const HOST_PORT_RANGE = 6000
+const usedHostPorts = new Set()
+
+function allocHostPorts(count) {
+  const ports = []
+  let start = HOST_PORT_BASE + Math.floor(Math.random() * HOST_PORT_RANGE)
+  for (let i = 0; i < count; i++) {
+    let p = start + i
+    let guard = 0
+    while (usedHostPorts.has(p) && guard++ < 100) {
+      start = HOST_PORT_BASE + Math.floor(Math.random() * HOST_PORT_RANGE)
+      p = start + i
+    }
+    usedHostPorts.add(p)
+    ports.push(p)
+  }
+  return ports
+}
+
+async function buildUsedPortSet() {
+  try {
+    const containers = await docker.listContainers({ filters: { label: [CONTAINER_LABEL] } })
+    for (const info of containers) {
+      for (const binding of info.Ports || []) {
+        if (binding.PublicPort) usedHostPorts.add(binding.PublicPort)
+      }
+    }
+  } catch {}
+}
+
 let imageBuilt = false
 
 async function cleanupOrphanedContainers() {
@@ -35,6 +69,7 @@ async function cleanupOrphanedContainers() {
 
 // Cleanup orphans on startup
 cleanupOrphanedContainers()
+buildUsedPortSet()
 
 async function ensureDockerImage() {
   if (imageBuilt) return
@@ -67,12 +102,6 @@ async function ensureDockerImage() {
   }
 }
 
-function tarDirectory(sourceDir) {
-  const tarPath = path.join(os.tmpdir(), `project-${Date.now()}.tar`)
-  execSync(`tar -cf "${tarPath}" -C "${sourceDir}" .`, { stdio: 'ignore' })
-  return tarPath
-}
-
 class TerminalSession extends EventEmitter {
   constructor(terminalId, roomId, userId) {
     super()
@@ -101,6 +130,18 @@ class TerminalSession extends EventEmitter {
   }
 
   async start(cols = 80, rows = 24) {
+    this.loadUser().catch(() => {})
+
+    // Provision the workspace BEFORE choosing the backend, so failures surface
+    // instead of silently producing an empty sandbox.
+    let projectDir = null
+    try {
+      projectDir = await syncProjectToDisk(this.roomId)
+    } catch (err) {
+      throw new Error(`Could not load workspace: ${err.message}`)
+    }
+    this.projectDir = projectDir
+
     try {
       await docker.ping()
       this.isDocker = true
@@ -108,6 +149,10 @@ class TerminalSession extends EventEmitter {
       console.warn('[terminal] Docker not available, falling back to local process', err.message)
       this.isDocker = false
     }
+
+    // Mark alive before starting so the mid-startup guards in the backends
+    // only fire when kill() is actually called while we await async setup.
+    this.alive = true
 
     if (this.isDocker) {
       try {
@@ -124,14 +169,10 @@ class TerminalSession extends EventEmitter {
 
   async startDocker(cols, rows) {
     await ensureDockerImage()
+    if (!this.alive) throw new Error("Terminal was closed during startup")
     await this.loadUser()
 
-    let projectDir = null
-    try {
-      projectDir = await syncProjectToDisk(this.roomId)
-    } catch (err) {
-      console.warn('[terminal] Could not sync project files:', err.message)
-    }
+    const projectDir = this.projectDir
 
     const envVars = [
       'TERM=xterm-256color',
@@ -142,7 +183,17 @@ class TerminalSession extends EventEmitter {
     if (this.userName) envVars.push(`GIT_AUTHOR_NAME=${this.userName}`, `GIT_COMMITTER_NAME=${this.userName}`)
     if (this.userEmail) envVars.push(`GIT_AUTHOR_EMAIL=${this.userEmail}`, `GIT_COMMITTER_EMAIL=${this.userEmail}`)
 
-    this.container = await docker.createContainer({
+    const hostPorts = allocHostPorts(EXPOSED_CONTAINER_PORTS.length)
+    this.portMap = Object.fromEntries(EXPOSED_CONTAINER_PORTS.map((cp, i) => [cp, hostPorts[i]]))
+    const exposedPorts = {}
+    const portBindings = {}
+    EXPOSED_CONTAINER_PORTS.forEach((cp, i) => {
+      const key = `${cp}/tcp`
+      exposedPorts[key] = {}
+      portBindings[key] = [{ HostPort: String(hostPorts[i]) }]
+    })
+
+    const containerConfig = {
       Image: TERMINAL_IMAGE,
       Cmd: ['/bin/bash', '-i'],
       Tty: true,
@@ -154,6 +205,7 @@ class TerminalSession extends EventEmitter {
       WorkingDir: '/workspace',
       Env: envVars,
       Labels: { [CONTAINER_LABEL]: 'true' },
+      ExposedPorts: exposedPorts,
       HostConfig: {
         Init: true,
         Memory: 512 * 1024 * 1024,
@@ -161,28 +213,34 @@ class TerminalSession extends EventEmitter {
         CpuPeriod: 100000,
         CpuQuota: 50000,
         PidsLimit: 512,
+        PortBindings: portBindings,
+        Binds: projectDir && fs.existsSync(projectDir) ? [`${projectDir}:/workspace:rw`] : [],
       }
-    })
+    }
+
+    this.container = await docker.createContainer(containerConfig)
+    if (!this.alive) {
+      await this.container.remove({ force: true }).catch(() => {})
+      throw new Error("Terminal was closed during startup")
+    }
 
     await this.container.start()
     this.alive = true
 
-    if (projectDir) {
+    if (projectDir && !containerConfig.HostConfig.Binds.length) {
       try {
-        const tarPath = tarDirectory(projectDir)
+        const tarPath = path.join(os.tmpdir(), `project-${Date.now()}.tar`)
+        execSync(`tar -cf "${tarPath}" -C "${projectDir}" .`, { stdio: 'ignore' })
         const tarStream = fs.createReadStream(tarPath)
         await this.container.putArchive(tarStream, { path: '/workspace' })
         tarStream.destroy()
         fs.unlinkSync(tarPath)
-        await this.container.exec({
-          Cmd: ['/bin/chown', '-R', 'sandbox:sandbox', '/workspace'],
-          AttachStdout: true,
-          AttachStderr: true,
-        }).then(e => e.start({ Tty: true }).then(s => new Promise(r => { s.on('end', r); s.on('error', r); setTimeout(r, 5000) }))).catch(() => {})
       } catch (err) {
         console.warn('[terminal] Could not copy project files into container:', err.message)
       }
     }
+
+    await this.chownWorkspace()
 
     try {
       await this.setupGitConfig()
@@ -214,6 +272,58 @@ class TerminalSession extends EventEmitter {
 
     if (cols && rows) {
       await this.resize(cols, rows)
+    }
+  }
+
+  async chownWorkspace() {
+    try {
+      const execInstance = await this.container.exec({
+        Cmd: ['/bin/chown', '-R', 'sandbox:sandbox', '/workspace'],
+        User: 'root',
+        AttachStdout: true,
+        AttachStderr: true,
+      })
+      const execStream = await execInstance.start({ Tty: true })
+      await new Promise((resolve) => {
+        execStream.on('end', resolve)
+        execStream.on('error', resolve)
+        setTimeout(() => resolve(), 5000)
+      })
+    } catch (err) {
+      console.warn('[terminal] chown /workspace failed:', err.message)
+    }
+  }
+
+  async getActivePorts() {
+    if (!this.container || !this.portMap) return {}
+    try {
+      const execInstance = await this.container.exec({
+        Cmd: ['/bin/cat', '/proc/net/tcp', '/proc/net/tcp6'],
+        AttachStdout: true,
+        AttachStderr: true,
+      })
+      const execStream = await execInstance.start({ Detach: false })
+      let out = ''
+      execStream.on('data', (chunk) => { out += chunk.toString('utf8') })
+      await new Promise((resolve) => {
+        execStream.on('end', resolve)
+        execStream.on('error', resolve)
+        setTimeout(() => resolve(), 3000)
+      })
+      const listening = new Set()
+      for (const line of out.split('\n')) {
+        const parts = line.trim().split(/\s+/)
+        if (parts.length < 4 || parts[3] !== '0A') continue
+        const hexPort = parts[1]?.split(':')[1]
+        if (hexPort) listening.add(parseInt(hexPort, 16))
+      }
+      const active = {}
+      for (const [cPort, hPort] of Object.entries(this.portMap)) {
+        if (listening.has(Number(cPort))) active[cPort] = hPort
+      }
+      return active
+    } catch (err) {
+      return {}
     }
   }
 
