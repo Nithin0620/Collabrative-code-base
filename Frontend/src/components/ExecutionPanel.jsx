@@ -233,8 +233,6 @@ export default function ExecutionPanel({
   }
 
   const isStreaming = running && !output
-  const displayStdout = output?.stdout ?? streamingStdout
-  const displayStderr = output?.stderr ?? streamingStderr
 
   return (
     <div

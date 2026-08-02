@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState, useEffect } from "react"
+import { memo, useCallback, useState, useEffect } from "react"
 
 function MinimapOverlay({ editorRef, users, localUsername, monaco }) {
   const [dots, setDots] = useState([])
