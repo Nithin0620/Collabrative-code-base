@@ -98,6 +98,72 @@ export function readProjectFromDisk(roomId) {
   return { fileTree, files }
 }
 
+// Classify editor { fileTree, files } entries against exclusion rules and the
+// project's .gitignore (if the .gitignore file itself is part of the project).
+// Returns the keys to keep and the relative paths that are ignored.
+function classifyEditorEntries(fileTree, files) {
+  const entries = Object.entries(fileTree || {})
+  if (entries.length === 0) return { keptKeys: new Set(), ignoredPaths: [] }
+
+  const childrenMap = {}
+  let gitignoreContent = ''
+  for (const [key, item] of entries) {
+    const parentKey = item.parentId || '__root__'
+    if (!childrenMap[parentKey]) childrenMap[parentKey] = []
+    childrenMap[parentKey].push({ key, item })
+    if (item.type === 'file' && item.name === '.gitignore') {
+      gitignoreContent = (files || []).find(f => f.id === key)?.content || ''
+    }
+  }
+
+  const ig = ignore()
+  ig.add(ALWAYS_IGNORED)
+  if (gitignoreContent) ig.add(gitignoreContent.split(/\r?\n/))
+  ig.add('!.gitignore')
+
+  const relOf = {}
+  const walkPaths = (parentKey, parts) => {
+    for (const child of childrenMap[parentKey] || []) {
+      const rel = [...parts, child.item.name].join('/')
+      relOf[child.key] = rel
+      if (child.item.type === 'folder') walkPaths(child.key, [...parts, child.item.name])
+    }
+  }
+  walkPaths('__root__', [])
+
+  const dropped = new Set()
+  const ignoredPaths = []
+  const markDrop = (key) => {
+    if (dropped.has(key)) return
+    dropped.add(key)
+    const item = fileTree[key]
+    const rel = relOf[key]
+    if (rel) ignoredPaths.push(rel + (item?.type === 'folder' ? '/' : ''))
+    ;(childrenMap[key] || []).forEach(c => markDrop(c.key))
+  }
+
+  for (const [key, item] of entries) {
+    const rel = relOf[key]
+    if (!rel || rel === '.gitignore') continue
+    if (isIgnored(ig, rel)) markDrop(key)
+  }
+
+  const keptKeys = new Set(entries.map(([key]) => key).filter(k => !dropped.has(k)))
+  return { keptKeys, ignoredPaths }
+}
+
+// Filter an editor { fileTree, files } payload so node_modules, .git and any
+// .gitignore'd files never reach the collaborative editor / Yjs document.
+export function filterEditorProject(fileTree, files) {
+  const { keptKeys, ignoredPaths } = classifyEditorEntries(fileTree, files)
+  const filtered = {}
+  for (const [key, item] of Object.entries(fileTree || {})) {
+    if (keptKeys.has(key)) filtered[key] = item
+  }
+  const filteredFiles = (files || []).filter(f => keptKeys.has(f.id))
+  return { fileTree: filtered, files: filteredFiles, ignoredPaths }
+}
+
 // List relative paths hidden by exclusion rules, e.g. for a "hidden files" badge.
 export function getHiddenPaths(roomId) {
   const projectDir = getProjectDir(roomId)
@@ -284,6 +350,55 @@ export async function getRecentGitCommits(roomId, maxCount = 20) {
   } catch {
     return []
   }
+}
+
+// Summarize uncommitted git changes so the UI can warn before snapshotting.
+export async function getGitStatus(roomId) {
+  const projectDir = getProjectDir(roomId)
+  if (!fs.existsSync(projectDir)) return null
+  const git = simpleGit(projectDir)
+  try {
+    if (!(await git.checkIsRepo())) return { isRepo: false, uncommitted: 0 }
+    const status = await git.status()
+    return {
+      isRepo: true,
+      uncommitted: status.files.length,
+      staged: status.files.filter(f => f.index !== ' ').length,
+      workingTree: status.files.filter(f => f.workingTree !== ' ').length,
+      branch: status.current,
+    }
+  } catch {
+    return null
+  }
+}
+
+// Read the on-disk state, persist it back to MongoDB and overwrite the live Yjs
+// document so every connected editor reflects what is on disk (used after git
+// pull/checkout/clone and by the "Sync Disk → Editor" button).
+export async function applyDiskStateToEditor(ySocketIO, roomId) {
+  const { fileTree, files } = readProjectFromDisk(roomId)
+  await Project.findOneAndUpdate(
+    { roomId },
+    { $set: { fileTree, files, updatedAt: new Date() } }
+  )
+
+  const yDoc = ySocketIO?.documents.get(roomId)
+  if (yDoc) {
+    yDoc.transact(() => {
+      const yFileTree = yDoc.getMap('fileTree')
+      yFileTree.clear()
+      Object.entries(fileTree).forEach(([key, val]) => {
+        yFileTree.set(key, val)
+      })
+      files.forEach((f) => {
+        const text = yDoc.getText('file:' + f.id)
+        text.delete(0, text.length)
+        text.insert(0, f.content || '')
+      })
+    })
+  }
+
+  return { fileTree, files }
 }
 
 export function tarProjectDir(roomId) {

@@ -3,7 +3,7 @@ import simpleGit from "simple-git"
 import path from "path"
 import fs from "fs"
 import { authenticateToken, requireProjectRole } from "../middleware/auth.js"
-import { getProjectDir, syncProjectToDisk, buildFileTreeFromDisk, readProjectFromDisk } from "../utils/projectSync.js"
+import { getProjectDir, syncProjectToDisk, buildFileTreeFromDisk, readProjectFromDisk, applyDiskStateToEditor } from "../utils/projectSync.js"
 import User from "../models/User.js"
 import Project from "../models/Project.js"
 
@@ -139,6 +139,50 @@ router.post("/clone-from-github", authenticateToken, async (req, res) => {
   }
 })
 
+// GitHub credential management for authenticated pushes/pulls/clones.
+router.get("/github/status", authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select("+githubToken")
+    if (!user) return res.status(404).json({ message: "User not found" })
+    res.json({
+      linked: !!user.githubToken,
+      username: user.username,
+      githubId: user.githubId || null,
+    })
+  } catch (error) {
+    res.status(500).json({ message: "Failed to load GitHub status" })
+  }
+})
+
+router.post("/github/token", authenticateToken, async (req, res) => {
+  try {
+    const { token } = req.body || {}
+    const pat = String(token || "").trim()
+    if (!pat) return res.status(400).json({ message: "A GitHub Personal Access Token is required" })
+    if (pat.length < 20) return res.status(400).json({ message: "That does not look like a valid GitHub token" })
+
+    await User.updateOne(
+      { _id: req.user._id },
+      { $set: { githubToken: pat } }
+    )
+    res.json({ success: true, message: "GitHub token saved" })
+  } catch (error) {
+    res.status(500).json({ message: "Failed to save GitHub token" })
+  }
+})
+
+router.delete("/github/token", authenticateToken, async (req, res) => {
+  try {
+    await User.updateOne(
+      { _id: req.user._id },
+      { $unset: { githubToken: "" } }
+    )
+    res.json({ success: true, message: "GitHub token removed" })
+  } catch (error) {
+    res.status(500).json({ message: "Failed to remove GitHub token" })
+  }
+})
+
 router.get("/:roomId/git/status", authenticateToken, requireProjectRole("owner", "editor", "viewer"), async (req, res) => {
   try {
     const git = getGit(req.params.roomId)
@@ -207,6 +251,7 @@ router.post("/:roomId/git/commit", authenticateToken, requireProjectRole("owner"
   try {
     const { message } = req.body
     if (!message) return res.status(400).json({ message: "Commit message required" })
+    await syncProjectToDisk(req.params.roomId)
     const git = getGit(req.params.roomId)
     await git.add(".")
     const result = await git.commit(message)
@@ -235,6 +280,7 @@ router.post("/:roomId/git/checkout", authenticateToken, requireProjectRole("owne
     if (!name) return res.status(400).json({ message: "Branch name required" })
     const git = getGit(req.params.roomId)
     await git.checkout(name)
+    await applyDiskStateToEditor(req.app.get('ySocketIO'), req.params.roomId)
     res.json({ message: `Switched to ${name}` })
   } catch (err) {
     res.status(500).json({ message: friendlyGitError(err) })
@@ -262,6 +308,7 @@ router.post("/:roomId/git/remote", authenticateToken, requireProjectRole("owner"
 router.post("/:roomId/git/push", authenticateToken, requireProjectRole("owner", "editor"), async (req, res) => {
   try {
     const { remote = 'origin', branch } = req.body
+    await syncProjectToDisk(req.params.roomId)
     const git = await getGitWithToken(req.params.roomId, req.user._id)
     const branchSummary = await git.branch()
     const pushBranch = branch || branchSummary.current
@@ -279,6 +326,7 @@ router.post("/:roomId/git/pull", authenticateToken, requireProjectRole("owner", 
     const branchSummary = await git.branch()
     const pullBranch = branch || branchSummary.current
     await git.pull(remote, pullBranch)
+    await applyDiskStateToEditor(req.app.get('ySocketIO'), req.params.roomId)
     res.json({ message: `Pulled from ${remote}/${pullBranch}` })
   } catch (err) {
     res.status(500).json({ message: friendlyGitError(err) })

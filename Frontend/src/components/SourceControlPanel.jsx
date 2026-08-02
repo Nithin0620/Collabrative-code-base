@@ -211,7 +211,7 @@ export default function SourceControlPanel({ roomId, onClose }) {
   const logEntries = log?.log || []
 
   return (
-    <div className="w-72 bg-gray-950 border-l border-gray-700 flex flex-col overflow-hidden shrink-0">
+    <div className="w-72 h-full bg-gray-950 border-l border-gray-700 flex flex-col overflow-hidden shrink-0">
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700">
         <h2 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Source Control</h2>
         <div className="flex items-center gap-1">

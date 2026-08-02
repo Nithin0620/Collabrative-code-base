@@ -29,8 +29,8 @@ export default function EditorToolbar({
   const lang = filename ? getFileInfo(filename) : null
 
   return (
-    <div className="flex items-center justify-between h-10 px-3 bg-gray-950 border-b border-gray-700 text-sm shrink-0">
-      <div className="flex items-center gap-3">
+    <div className="flex items-center justify-between flex-wrap gap-x-3 gap-y-1.5 h-auto min-h-10 px-3 py-1.5 bg-gray-950 border-b border-gray-700 text-sm shrink-0">
+      <div className="flex items-center gap-3 flex-wrap">
         {filename && (
           <div className="flex items-center gap-1.5 text-gray-300">
             <span
@@ -86,7 +86,7 @@ export default function EditorToolbar({
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center justify-end flex-wrap gap-2">
         {lastSaved && (
           <span className="text-[10px] text-gray-500">
             {isSaving ? "Saving..." : `Saved ${lastSaved}`}

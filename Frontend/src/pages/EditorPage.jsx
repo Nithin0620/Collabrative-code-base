@@ -6,7 +6,7 @@ import * as Y from "yjs"
 import { SocketIOProvider } from "y-socket.io"
 import { io } from "socket.io-client"
 import { useAuth } from "../hooks/useAuth"
-import { saveRoom } from "../lib/rooms"
+import { saveRoom, updateRoomName } from "../lib/rooms"
 import { getFileInfo, generateId, filterIgnoredTree } from "../lib/fileTree"
 import { defineCustomThemes } from "../lib/themes"
 import FileExplorer from "../components/FileExplorer"
@@ -34,6 +34,8 @@ import PasswordPrompt from "../components/PasswordPrompt"
 import ShareModal from "../components/ShareModal"
 import ShortcutsModal from "../components/ShortcutsModal"
 import SourceControlPanel from "../components/SourceControlPanel"
+import SettingsModal from "../components/SettingsModal"
+import OnboardingModal from "../components/OnboardingModal"
 import ToastNotification from "../components/ToastNotification"
 import { downloadFile, downloadProjectAsZip } from "../lib/download"
 
@@ -161,6 +163,7 @@ export default function EditorPage({ roomId }) {
   const autoSaveRef = useRef(null)
   const saveProjectRef = useRef(null)
   const knownUsersRef = useRef(new Map())
+  const editingRoomNameRef = useRef(false)
 
   const [users, setUsers] = useState([])
   const [usersMap, setUsersMap] = useState(new Map())
@@ -182,7 +185,26 @@ export default function EditorPage({ roomId }) {
   const [editorInstance, setEditorInstance] = useState(null)
   const [showShare, setShowShare] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [showOnboarding, setShowOnboarding] = useState(false)
+
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem("collab-onboarded")) {
+        setShowOnboarding(true)
+      }
+    } catch {}
+  }, [])
+
+  const closeOnboarding = useCallback(() => {
+    try {
+      localStorage.setItem("collab-onboarded", "true")
+    } catch {}
+    setShowOnboarding(false)
+  }, [])
   const [toasts, setToasts] = useState([])
+  const [editingRoomName, setEditingRoomName] = useState(false)
+  const [editRoomName, setEditRoomName] = useState("")
 
   const addToast = useCallback((title, message, type = "info") => {
     const id = Date.now() + Math.random().toString(36).slice(2, 6)
@@ -192,6 +214,29 @@ export default function EditorPage({ roomId }) {
   const removeToast = useCallback((id) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
   }, [])
+
+  const handleRoomNameSave = useCallback(async () => {
+    const name = editRoomName.trim()
+    setEditingRoomName(false)
+    editingRoomNameRef.current = false
+    if (!name) {
+      setEditRoomName(roomName)
+      return
+    }
+    const result = await renameRoom(name)
+    if (result && result.error) {
+      addToast("Rename failed", result.error, "error")
+    } else {
+      updateRoomName(roomId, name)
+      addToast("Room renamed", `Room is now "${name}"`, "success")
+    }
+  }, [editRoomName, roomName, renameRoom, roomId, addToast])
+
+  const startRoomNameEdit = useCallback(() => {
+    setEditRoomName(roomName || roomId)
+    setEditingRoomName(true)
+    editingRoomNameRef.current = true
+  }, [roomName, roomId])
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -204,7 +249,7 @@ export default function EditorPage({ roomId }) {
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [])
 
-  const { role, members, bannedUsers, settings, canEdit, isOwner, requiresPassword, requiresInvite, fetchProject, fetchMembers, addMember, changeRole, kickUser, banUser, unbanUser, updateSettings } = useProjectRole(roomId)
+  const { role, members, bannedUsers, settings, roomName, setRoomName, renameRoom, canEdit, isOwner, requiresPassword, requiresInvite, fetchProject, fetchMembers, addMember, changeRole, kickUser, banUser, unbanUser, updateSettings } = useProjectRole(roomId)
 
   const {
     localStream,
@@ -225,6 +270,7 @@ export default function EditorPage({ roomId }) {
 
   const [fileTree, setFileTree] = useState({})
   const [selectedFileId, setSelectedFileId] = useState(null)
+  const [hiddenPaths, setHiddenPaths] = useState([])
   const [openTabs, setOpenTabs] = useState([])
   const [showTerminal, setShowTerminal] = useState(false)
   const [terminalPanelMounted, setTerminalPanelMounted] = useState(false)
@@ -420,6 +466,12 @@ export default function EditorPage({ roomId }) {
         if (project.settings.theme) setTheme(project.settings.theme)
         if (project.settings.fontSize) setFontSize(project.settings.fontSize)
       }
+
+      if (project.settings?.roomName) {
+        saveRoom({ id: roomId, name: project.settings.roomName })
+      }
+
+      setHiddenPaths(project.hiddenPaths || [])
 
       const tree = {}
       yFileTree.forEach((val, key) => { tree[key] = val })
@@ -864,6 +916,7 @@ export default function EditorPage({ roomId }) {
         e.stopPropagation()
         setShowComments(true)
         setShowChat(false)
+        setShowGit(false)
         setFocusedCommentId(comment._id)
         setTimeout(() => setFocusedCommentId(null), 5000)
       }
@@ -965,6 +1018,15 @@ export default function EditorPage({ roomId }) {
         fetchMembers()
       } catch (err) {
         console.error("member-action-event handler error:", err)
+      }
+    })
+    chatSocket.on("room-name-updated", (data) => {
+      if (data && typeof data.roomName === "string") {
+        setRoomName(data.roomName)
+        updateRoomName(roomId, data.roomName)
+        if (editingRoomNameRef.current) {
+          setEditRoomName(data.roomName)
+        }
       }
     })
     setChatSocket(chatSocket)
@@ -1221,6 +1283,7 @@ export default function EditorPage({ roomId }) {
         setPendingPrefill({ startLine, endLine, selectedText })
         setShowComments(true)
         setShowChat(false)
+        setShowGit(false)
       },
     })
     return () => disposable.dispose()
@@ -1421,7 +1484,7 @@ export default function EditorPage({ roomId }) {
   }, [handleSave, handleQuickSnapshot])
 
   return (
-    <main className="h-screen w-full bg-gray-950 flex gap-4 p-4">
+    <main className="h-screen w-full bg-gray-950 flex gap-4 p-4 relative overflow-hidden">
       <aside
         className="h-full bg-gray-900 rounded-lg flex flex-col border border-gray-700 shrink-0 relative overflow-hidden"
         style={{ width: sidebarWidth, minWidth: 44, maxWidth: 320 }}
@@ -1450,6 +1513,44 @@ export default function EditorPage({ roomId }) {
               </svg>
               Dashboard
             </button>
+            <div className="mt-1.5 flex items-center gap-1.5 min-w-0">
+              {editingRoomName ? (
+                <input
+                  autoFocus
+                  value={editRoomName}
+                  onChange={(e) => setEditRoomName(e.target.value)}
+                  onBlur={handleRoomNameSave}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleRoomNameSave()
+                    if (e.key === "Escape") {
+                      setEditingRoomName(false)
+                      editingRoomNameRef.current = false
+                      setEditRoomName(roomName)
+                    }
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-full bg-gray-800 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:outline-none focus:border-amber-500"
+                />
+              ) : (
+                <div className="flex items-center gap-1 min-w-0 flex-1">
+                  <span className="text-sm font-semibold text-white truncate" title={roomName || roomId}>
+                    {roomName || "Untitled Room"}
+                  </span>
+                  <span className="text-[9px] text-gray-500 font-mono truncate shrink-0">#{roomId}</span>
+                  {isOwner && (
+                    <button
+                      onClick={startRoomNameEdit}
+                      className="p-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors cursor-pointer shrink-0"
+                      title="Rename room"
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -1475,6 +1576,7 @@ export default function EditorPage({ roomId }) {
           <FileExplorer
             fileTree={fileTree}
             selectedFileId={selectedFileId}
+            hiddenPaths={hiddenPaths}
             onSelect={(item) => openTab(item.id)}
             onCreateFile={handleCreateFile}
             onCreateFolder={handleCreateFolder}
@@ -1707,7 +1809,7 @@ export default function EditorPage({ roomId }) {
                   Gallery
                 </button>
                 <button
-                  onClick={() => { setShowChat(!showChat); if (!showChat) setShowComments(false) }}
+                  onClick={() => { setShowChat(!showChat); if (!showChat) { setShowComments(false); setShowGit(false) } }}
                   className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium transition-colors cursor-pointer ${
                     showChat
                       ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
@@ -1729,6 +1831,16 @@ export default function EditorPage({ roomId }) {
                   <span>Share</span>
                 </button>
               </div>
+              <button
+                onClick={() => setShowSettings(true)}
+                className="w-full flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-600 transition-colors cursor-pointer"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Settings
+              </button>
               <button
                 onClick={logout}
                 className="w-full px-1.5 py-1 rounded text-[10px] text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors cursor-pointer"
@@ -1787,7 +1899,7 @@ export default function EditorPage({ roomId }) {
                 </svg>
               </button>
               <button
-                onClick={() => { setShowChat(!showChat); if (!showChat) setShowComments(false) }}
+                onClick={() => { setShowChat(!showChat); if (!showChat) { setShowComments(false); setShowGit(false) } }}
                 className={`p-1.5 rounded transition-colors cursor-pointer ${
                   showChat
                     ? "bg-amber-500/20 text-amber-400"
@@ -1806,6 +1918,16 @@ export default function EditorPage({ roomId }) {
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setShowSettings(true)}
+                className="p-1.5 rounded text-gray-400 hover:bg-gray-800 hover:text-white transition-colors cursor-pointer"
+                title="Settings"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
               </button>
               <button
@@ -1830,7 +1952,7 @@ export default function EditorPage({ roomId }) {
         </div>
       </aside>
 
-      <section className="flex-1 bg-gray-900 rounded-lg overflow-hidden border border-gray-700 flex flex-col">
+      <section className="flex-1 min-w-0 bg-gray-900 rounded-lg overflow-hidden border border-gray-700 flex flex-col">
         <EditorToolbar
           filename={selectedFileName}
           theme={theme}
@@ -1840,7 +1962,7 @@ export default function EditorPage({ roomId }) {
           onSave={handleSave}
           onSnapshot={handleSnapshotClick}
           onShowHistory={() => setShowHistory(true)}
-          onToggleComments={() => { setShowComments(!showComments); if (!showComments) setShowChat(false) }}
+          onToggleComments={() => { setShowComments(!showComments); if (!showComments) { setShowChat(false); setShowGit(false) } }}
           showComments={showComments}
 
           lastSaved={lastSavedTime ? new Date(lastSavedTime).toLocaleTimeString() : null}
@@ -1913,6 +2035,7 @@ export default function EditorPage({ roomId }) {
                       })
                       setShowComments(true)
                       setShowChat(false)
+                      setShowGit(false)
                     }}
                     className="fixed z-50 flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500 text-gray-950 text-xs font-semibold shadow-lg hover:bg-amber-400 transition-colors cursor-pointer"
                     style={{ top: selectionInfo.top, left: selectionInfo.left }}
@@ -1956,43 +2079,49 @@ export default function EditorPage({ roomId }) {
       </section>
 
       {showComments && (
-        <CommentsPanel
-          roomId={roomId}
-          user={user}
-          selectedFileId={selectedFileId}
-          selectedFileName={selectedFileName}
-          onJumpToLine={handleJumpToLine}
-          onClose={() => setShowComments(false)}
-          addCommentRef={addCommentRef}
-          focusedCommentId={focusedCommentId}
-          pendingPrefill={pendingPrefill}
-          onPrefillConsumed={() => setPendingPrefill(null)}
-          onCommentChanged={() => setCommentVersion((v) => v + 1)}
-        />
+        <div className="absolute top-4 bottom-4 right-4 z-20 w-80 rounded-lg overflow-hidden shadow-2xl border border-gray-700">
+          <CommentsPanel
+            roomId={roomId}
+            user={user}
+            selectedFileId={selectedFileId}
+            selectedFileName={selectedFileName}
+            onJumpToLine={handleJumpToLine}
+            onClose={() => setShowComments(false)}
+            addCommentRef={addCommentRef}
+            focusedCommentId={focusedCommentId}
+            pendingPrefill={pendingPrefill}
+            onPrefillConsumed={() => setPendingPrefill(null)}
+            onCommentChanged={() => setCommentVersion((v) => v + 1)}
+          />
+        </div>
       )}
 
       {showGit && (
-        <SourceControlPanel
-          roomId={roomId}
-          onClose={() => setShowGit(false)}
-        />
+        <div className="absolute top-4 bottom-4 right-4 z-20 w-72 rounded-lg overflow-hidden shadow-2xl border border-gray-700">
+          <SourceControlPanel
+            roomId={roomId}
+            onClose={() => setShowGit(false)}
+          />
+        </div>
       )}
 
       {showChat && (
-        <div className="h-full w-80 bg-gray-900 rounded-lg border border-gray-700 flex flex-col shrink-0">
-          <div className="flex items-center justify-between p-3 border-b border-gray-700">
-            <h3 className="text-sm font-bold text-white">Chat</h3>
-            <button
-              onClick={() => setShowChat(false)}
-              className="text-gray-400 hover:text-white transition-colors cursor-pointer"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <ChatPanel roomId={roomId} user={user} socket={chatSocket} />
+        <div className="absolute top-4 bottom-4 right-4 z-20 w-80 rounded-lg overflow-hidden shadow-2xl border border-gray-700">
+          <div className="h-full w-80 bg-gray-900 rounded-lg border border-gray-700 flex flex-col shrink-0">
+            <div className="flex items-center justify-between p-3 border-b border-gray-700">
+              <h3 className="text-sm font-bold text-white">Chat</h3>
+              <button
+                onClick={() => setShowChat(false)}
+                className="text-gray-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <ChatPanel roomId={roomId} user={user} socket={chatSocket} />
+            </div>
           </div>
         </div>
       )}
@@ -2028,13 +2157,21 @@ export default function EditorPage({ roomId }) {
       {showShare && (
         <ShareModal
           roomId={roomId}
-          roomName={settings?.roomName}
+          roomName={roomName}
           onClose={() => setShowShare(false)}
         />
       )}
 
       {showShortcuts && (
         <ShortcutsModal onClose={() => setShowShortcuts(false)} />
+      )}
+
+      {showSettings && (
+        <SettingsModal onClose={() => setShowSettings(false)} />
+      )}
+
+      {showOnboarding && (
+        <OnboardingModal onClose={closeOnboarding} />
       )}
 
       <ToastNotification toasts={toasts} onDismiss={removeToast} />

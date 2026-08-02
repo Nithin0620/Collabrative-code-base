@@ -10,6 +10,7 @@ export default function useProjectRole(roomId) {
 
   const [requiresPassword, setRequiresPassword] = useState(false)
   const [requiresInvite, setRequiresInvite] = useState(false)
+  const [roomName, setRoomName] = useState("")
 
   const fetchProject = useCallback(async () => {
     if (!roomId) return
@@ -32,6 +33,7 @@ export default function useProjectRole(roomId) {
         setProject(data.project)
         setRole(data.project.userRole ?? null)
         setSettings(data.project.settings || {})
+        setRoomName(data.project.settings?.roomName || "")
         setBannedUsers(data.project.bannedUsers || [])
       }
     } catch (err) {
@@ -155,10 +157,28 @@ export default function useProjectRole(roomId) {
     return { error: err.message }
   }, [roomId, fetchProject])
 
+  const renameRoom = useCallback(async (name) => {
+    const res = await fetch("/api/projects/" + roomId + "/name", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ roomName: name }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setRoomName(data.roomName)
+      await fetchProject()
+      return true
+    }
+    const err = await res.json()
+    return { error: err.message }
+  }, [roomId, fetchProject])
+
   const canEdit = role === "owner" || (role === "editor" && !settings?.readOnly)
 
   return {
     role, project, members, bannedUsers, loading, settings,
+    roomName, setRoomName, renameRoom,
     canEdit,
     requiresPassword,
     requiresInvite,

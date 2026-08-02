@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs"
 import Project from "../models/Project.js"
 import User from "../models/User.js"
 import { authenticateToken, requireProjectRole, getUserProjectRole, requireRoomAccess } from "../middleware/auth.js"
-import { syncProjectToDisk, readProjectFromDisk, commitProjectToGit, getHiddenPaths, getRecentGitCommits } from "../utils/projectSync.js"
+import { syncProjectToDisk, commitProjectToGit, getHiddenPaths, getRecentGitCommits, getCurrentBranch, filterEditorProject, getGitStatus, applyDiskStateToEditor } from "../utils/projectSync.js"
 
 const router = Router()
 
@@ -105,6 +105,13 @@ router.get("/:roomId", authenticateToken, async (req, res) => {
       projectObj.settings.hasPassword = true
       projectObj.settings.password = undefined
     }
+
+    // Keep the editor tree clean: node_modules, .git and anything the project's
+    // .gitignore excludes never reach the collaborative editor.
+    const filtered = filterEditorProject(projectObj.fileTree, projectObj.files)
+    projectObj.fileTree = filtered.fileTree
+    projectObj.files = filtered.files
+    projectObj.hiddenPaths = filtered.ignoredPaths
 
     let role = getUserProjectRole(project, userId)
     if (project.settings?.readOnly && !isOwner) {
@@ -210,6 +217,7 @@ router.get("/:roomId/history", authenticateToken, requireRoomAccess, async (req,
     }
     let gitCommits = []
     let gitInfo = null
+    let gitStatus = null
     try {
       gitCommits = await getRecentGitCommits(req.params.roomId)
       if (gitCommits.length > 0) {
@@ -218,8 +226,9 @@ router.get("/:roomId/history", authenticateToken, requireRoomAccess, async (req,
           hasRepo: true,
         }
       }
+      gitStatus = await getGitStatus(req.params.roomId)
     } catch {}
-    res.json({ history: project.history, gitCommits, gitInfo })
+    res.json({ history: project.history, gitCommits, gitInfo, gitStatus })
   } catch (error) {
     res.status(500).json({ message: "Failed to load history" })
   }
@@ -257,29 +266,8 @@ router.post("/:roomId/sync/to-disk", authenticateToken, requireRoomAccess, async
 
 router.post("/:roomId/sync/to-editor", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
-    const { fileTree, files } = readProjectFromDisk(req.params.roomId)
-
-    await Project.findOneAndUpdate(
-      { roomId: req.params.roomId },
-      { $set: { fileTree, files, updatedAt: new Date() } }
-    )
-
     const ySocketIO = req.app.get('ySocketIO')
-    const yDoc = ySocketIO?.documents.get(req.params.roomId)
-    if (yDoc) {
-      yDoc.transact(() => {
-        const yFileTree = yDoc.getMap('fileTree')
-        yFileTree.clear()
-        Object.entries(fileTree).forEach(([key, val]) => {
-          yFileTree.set(key, val)
-        })
-        files.forEach((f) => {
-          const text = yDoc.getText('file:' + f.id)
-          text.delete(0, text.length)
-          text.insert(0, f.content || '')
-        })
-      })
-    }
+    const { files } = await applyDiskStateToEditor(ySocketIO, req.params.roomId)
 
     res.json({
       success: true,
@@ -583,6 +571,30 @@ router.patch("/:roomId/settings", authenticateToken, requireProjectRole("owner")
   } catch (error) {
     console.error("[settings] Error:", error)
     res.status(500).json({ message: "Failed to update settings" })
+  }
+})
+
+router.patch("/:roomId/name", authenticateToken, requireProjectRole("owner"), async (req, res) => {
+  try {
+    const { roomName } = req.body
+    const name = String(roomName || "").trim().slice(0, 100)
+    const project = req.project
+
+    project.settings.roomName = name
+    project.markModified("settings")
+    await project.save()
+
+    const io = req.app.get("io")
+    io.to(req.params.roomId).emit("room-name-updated", {
+      roomId: req.params.roomId,
+      roomName: name,
+      updatedBy: req.user.username,
+    })
+
+    res.json({ success: true, roomName: name })
+  } catch (error) {
+    console.error("[renameRoom] Error:", error)
+    res.status(500).json({ message: "Failed to update room name" })
   }
 })
 

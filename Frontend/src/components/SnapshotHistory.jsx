@@ -58,6 +58,7 @@ export default function SnapshotHistory({
   const [viewMode, setViewMode] = useState("list")
   const [gitCommits, setGitCommits] = useState([])
   const [gitInfo, setGitInfo] = useState(null)
+  const [gitStatus, setGitStatus] = useState(null)
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -69,6 +70,7 @@ export default function SnapshotHistory({
         setHistory((data.history || []).slice().reverse())
         setGitCommits(data.gitCommits || [])
         setGitInfo(data.gitInfo || null)
+        setGitStatus(data.gitStatus || null)
       } catch {
         console.error("Failed to load history")
       } finally {
@@ -350,6 +352,20 @@ export default function SnapshotHistory({
             </button>
           </div>
         </div>
+
+        {gitStatus?.isRepo && gitStatus.uncommitted > 0 && (
+          <div className="mx-4 mt-3 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
+            <svg className="w-4 h-4 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+            </svg>
+            <p className="text-[11px] text-amber-200/90">
+              {gitStatus.uncommitted} uncommitted change{gitStatus.uncommitted !== 1 ? "s" : ""} on{" "}
+              <span className="font-mono">{gitStatus.branch || "current branch"}</span>
+              {gitStatus.staged > 0 && ` · ${gitStatus.staged} staged`}
+              {gitStatus.workingTree > 0 && ` · ${gitStatus.workingTree} in working tree`}
+            </p>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto p-4">
           {loading ? (

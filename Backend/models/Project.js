@@ -43,6 +43,7 @@ const projectSchema = new mongoose.Schema(
       inviteOnly: { type: Boolean, default: false },
       readOnly: { type: Boolean, default: false },
       password: { type: String, default: "" },
+      roomName: { type: String, default: "" },
     },
     members: {
       type: Map,
