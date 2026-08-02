@@ -5,7 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 
 // Single terminal instance
-function TerminalInstance({ terminalId, roomId, socket, isActive, onReady, onClose }) {
+function TerminalInstance({ terminalId, roomId, socket, isActive, onReady }) {
   const containerRef = useRef(null)
   const termRef = useRef(null)
   const fitAddonRef = useRef(null)

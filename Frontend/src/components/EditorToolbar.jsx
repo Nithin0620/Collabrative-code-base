@@ -20,7 +20,6 @@ export default function EditorToolbar({
   onDownloadFile,
   onDownloadProject,
   readOnly,
-  onOpenShare,
   showTerminal,
   onToggleTerminal,
   onToggleGit,

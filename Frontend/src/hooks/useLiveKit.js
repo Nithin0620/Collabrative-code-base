@@ -103,25 +103,25 @@ export default function useLiveKit(socket, roomId, user) {
       }
     })
 
-    room.on(RoomEvent.ParticipantConnected, (participant) => {
+    room.on(RoomEvent.ParticipantConnected, () => {
       if (mountedRef.current) {
         updateRemoteStreams()
       }
     })
 
-    room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+    room.on(RoomEvent.ParticipantDisconnected, () => {
       if (mountedRef.current) {
         updateRemoteStreams()
       }
     })
 
-    room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+    room.on(RoomEvent.TrackSubscribed, () => {
       if (mountedRef.current) {
         updateRemoteStreams()
       }
     })
 
-    room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+    room.on(RoomEvent.TrackUnsubscribed, () => {
       if (mountedRef.current) {
         updateRemoteStreams()
       }

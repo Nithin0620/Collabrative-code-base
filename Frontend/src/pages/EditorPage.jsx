@@ -166,9 +166,8 @@ export default function EditorPage({ roomId }) {
   const editingRoomNameRef = useRef(false)
 
   const [users, setUsers] = useState([])
-  const [usersMap, setUsersMap] = useState(new Map())
+  const [, setUsersMap] = useState(new Map())
   const [typingUsers, setTypingUsers] = useState([])
-  const [copied, setCopied] = useState(false)
   const [followedUser, setFollowedUser] = useState(null)
   const [showChat, setShowChat] = useState(false)
   const [chatSocket, setChatSocket] = useState(null)
@@ -258,14 +257,9 @@ export default function EditorPage({ roomId }) {
     videoEnabled,
     isSpeaking,
     handRaised,
-    setHandRaised,
     toggleAudio,
     toggleVideo,
     toggleHand,
-    callPeer,
-    cleanupPeer,
-    cleanup: cleanupWebRTC,
-    getLocalStream,
   } = useLiveKit(chatSocket, roomId, user)
 
   const [fileTree, setFileTree] = useState({})
@@ -397,17 +391,6 @@ export default function EditorPage({ roomId }) {
   const selectedFileLanguage = selectedFileName
     ? getFileInfo(selectedFileName).language
     : "plaintext"
-
-  const inviteLink = typeof window !== "undefined"
-    ? `${window.location.origin}/room/${roomId}`
-    : ""
-
-  const copyInviteLink = useCallback(() => {
-    navigator.clipboard.writeText(inviteLink).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
-  }, [inviteLink])
 
   const getFileTreeObj = useCallback(() => {
     const obj = {}
@@ -752,7 +735,7 @@ export default function EditorPage({ roomId }) {
 
     const onAwareness = () => {
       const states = Array.from(awareness.getStates().entries())
-      for (const [clientID, state] of states) {
+      for (const [, state] of states) {
         if (state.user?.username !== followedUser) continue
         const pos = state.user?.cursorPos
         const targetFileId = state.user?.currentFileId || pos?.fileId
@@ -2231,7 +2214,7 @@ export default function EditorPage({ roomId }) {
           code={selectedFileId ? getFileContent(selectedFileId) : ""}
           language={selectedFileLanguage}
           onClose={() => { setShowRunner(false); setPendingTestCases(null) }}
-          onInsertSnippet={(code, lang) => {
+          onInsertSnippet={() => {
             setShowRunner(false)
             setShowSnippets(true)
           }}

@@ -45,7 +45,6 @@ jobs:
   frontend-lint:
     name: Frontend lint
     runs-on: ubuntu-latest
-    continue-on-error: true
     defaults:
       run:
         working-directory: Frontend
