@@ -7,7 +7,7 @@ const ICE_SERVERS = {
   ],
 }
 
-export default function useWebRTC(socket, roomId, user) {
+export default function useWebRTC(socket, roomId) {
   const [localStream, setLocalStream] = useState(null)
   const [remoteStreams, setRemoteStreams] = useState({})
   const [audioEnabled, setAudioEnabled] = useState(false)

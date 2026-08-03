@@ -1,7 +1,7 @@
 import { useState } from "react"
 import RoleBadge from "./RoleBadge"
 
-export default function RoleManager({ roomId, members, bannedUsers, settings, isOwner, onAddMember, onChangeRole, onKick, onBan, onUnban, onUpdateSettings, onClose, onRefresh }) {
+export default function RoleManager({ members, bannedUsers, settings, isOwner, onAddMember, onChangeRole, onKick, onBan, onUnban, onUpdateSettings, onClose, onRefresh }) {
   const [addUsername, setAddUsername] = useState("")
   const [addRole, setAddRole] = useState("editor")
   const [error, setError] = useState("")

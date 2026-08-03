@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { Editor } from "@monaco-editor/react"
 import { downloadSnapshotAsZip } from "../lib/download"
 
@@ -385,7 +385,7 @@ export default function SnapshotHistory({
           ) : viewMode === "timeline" ? (
             <div className="relative pl-6">
               <div className="absolute left-[18px] top-2 bottom-2 w-0.5 bg-gray-700" />
-              {filteredHistory.map((snapshot, index) => (
+              {filteredHistory.map((snapshot) => (
                 <div key={snapshot._id} className="relative mb-4">
                   <div className="absolute -left-6 top-3 w-3 h-3 rounded-full bg-gray-700 border-2 border-amber-500 z-10" />
                   <div className="ml-2 rounded-lg bg-gray-900 border border-gray-700 hover:border-gray-600 transition-colors p-3">
@@ -479,7 +479,7 @@ export default function SnapshotHistory({
                   </div>
                 </div>
               )}
-              {filteredHistory.map((snapshot, index) => (
+              {filteredHistory.map((snapshot) => (
                 <div
                   key={snapshot._id}
                   className="rounded-lg bg-gray-900 border border-gray-700 hover:border-gray-600 transition-colors overflow-hidden"
