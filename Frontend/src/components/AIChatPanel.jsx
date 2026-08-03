@@ -23,10 +23,12 @@ function renderInline(text) {
       }
       const link = part.match(/^\[([^\]]*)\]\(([^)]*)\)$/)
       if (link) {
+        const href = safeLinkHref(link[2])
+        if (!href) return <Fragment key={i}>{link[1] || link[2]}</Fragment>
         return (
           <a
             key={i}
-            href={link[2]}
+            href={href}
             target="_blank"
             rel="noreferrer"
             className="text-amber-400 hover:underline break-all"
@@ -38,6 +40,16 @@ function renderInline(text) {
       return <Fragment key={i}>{part}</Fragment>
     })
     .filter((node) => node !== "")
+}
+
+function safeLinkHref(rawHref) {
+  const href = String(rawHref || "").trim()
+  if (!href) return null
+  try {
+    const parsed = new URL(href, window.location.origin)
+    if (parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:") return href
+  } catch {}
+  return null
 }
 
 function renderTextBlock(text, onInsert, keyBase) {

@@ -358,7 +358,7 @@ export default function EditorPage({ roomId }) {
     }
     window.addEventListener("keydown", handleTabShortcuts)
     return () => window.removeEventListener("keydown", handleTabShortcuts)
-  }, [selectedFileId, openTabs])
+  }, [selectedFileId, openTabs, closeTab])
 
   const [theme, setTheme] = useState("vs-dark")
   const [fontSize, setFontSize] = useState(14)
@@ -391,6 +391,7 @@ export default function EditorPage({ roomId }) {
   fileTreeRef.current = fileTree
 
   const insertAtCursor = useCallback((text) => {
+    if (!canEdit) return
     const editor = editorRef.current
     const model = editor?.getModel()
     if (!editor || !model || !monaco) return
@@ -416,7 +417,7 @@ export default function EditorPage({ roomId }) {
       }
     }
     editor.focus()
-  }, [monaco])
+  }, [monaco, canEdit])
 
   const getAIContext = useCallback(() => {
     const pos = editorRef.current?.getPosition()
@@ -456,6 +457,7 @@ export default function EditorPage({ roomId }) {
 
   const aiChat = useAIChat({
     roomId,
+    user,
     ydoc,
     fileTree,
     selectedFileId,
@@ -1250,7 +1252,7 @@ export default function EditorPage({ roomId }) {
       const styleEl = document.getElementById("y-monaco-cursors")
       if (styleEl) styleEl.remove()
     }
-  }, [user, token, ydoc, yFileTree, roomId, loadProjectData])
+  }, [user, token, ydoc, yFileTree, roomId, loadProjectData, fetchProject, fetchMembers, navigate, role, setRoomName])
 
   const [roomAccessError, setRoomAccessError] = useState("")
 
@@ -1528,9 +1530,11 @@ export default function EditorPage({ roomId }) {
     document.addEventListener("mouseup", onMouseUp)
   }, [rightPanelWidth])
 
+  const remoteStreamCount = Object.keys(remoteStreams).length
+
   useEffect(() => {
     setCameraToastDismissed(false)
-  }, [Object.keys(remoteStreams).length])
+  }, [remoteStreamCount])
 
   const handleJumpToLine = useCallback((fileId, line) => {
     setSelectedFileId(fileId)

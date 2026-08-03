@@ -15,15 +15,14 @@ const messageSchema = new mongoose.Schema(
 const aiConversationSchema = new mongoose.Schema(
   {
     roomId: { type: String, required: true, index: true },
-    userId: { type: String, required: true },
-    userName: { type: String, default: "" },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    userName: { type: String, default: "", index: true },
     messages: { type: [messageSchema], default: [] },
-    updatedAt: { type: Date, default: Date.now },
   },
   { timestamps: true }
 )
 
-aiConversationSchema.index({ roomId: 1, userId: 1 })
+aiConversationSchema.index({ roomId: 1, userId: 1 }, { unique: true })
 
 const AIConversation = mongoose.models.AIConversation || mongoose.model("AIConversation", aiConversationSchema)
 export default AIConversation

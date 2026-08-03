@@ -6,7 +6,7 @@ const aiEditSchema = new mongoose.Schema({
   roomId: { type: String, required: true, index: true },
   proposalId: { type: String, required: true },
   path: { type: String, required: true },
-  userId: { type: String, default: "" },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   userName: { type: String, default: "" },
   oldContent: { type: String, default: "" },
   newContent: { type: String, default: "" },

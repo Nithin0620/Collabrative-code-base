@@ -25,6 +25,7 @@ import aiRoutes from "./routes/ai.js"
 import { createTerminal, getTerminal, killTerminal } from "./utils/terminalManager.js"
 import User from "./models/User.js"
 import Project from "./models/Project.js"
+import Execution from "./models/Execution.js"
 import { getUserProjectRole } from "./middleware/auth.js"
 
 await connectDB()
@@ -268,8 +269,28 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("peer-joined", { peerId: socket.id, userRole: socket.data.userRole })
   })
 
-  socket.on("join-execution", (executionId) => {
-    socket.join("exec:" + executionId)
+  socket.on("join-execution", async (executionId) => {
+    if (!socket.user) {
+      socket.emit("exec:error", { executionId, message: "Authentication required" })
+      return
+    }
+    try {
+      const execution = await Execution.findOne({ executionId: String(executionId || "") }).select("userId roomId").lean()
+      if (!execution) {
+        socket.emit("exec:error", { executionId, message: "Execution not found" })
+        return
+      }
+      const userId = socket.user._id?.toString()
+      const ownsExecution = execution.userId?.toString() === userId
+      const sameRoom = execution.roomId && execution.roomId === socket.data.roomId && socket.data.userRole !== "viewer"
+      if (!ownsExecution && !sameRoom) {
+        socket.emit("exec:error", { executionId, message: "Not authorized for this execution" })
+        return
+      }
+      socket.join("exec:" + String(executionId || ""))
+    } catch {
+      socket.emit("exec:error", { executionId, message: "Failed to join execution stream" })
+    }
   })
 
   socket.on("get-room-members", (roomId, cb) => {

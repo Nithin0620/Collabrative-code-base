@@ -2,24 +2,12 @@ import { getGitStatus, getGitDiffStat } from "../utils/projectSync.js"
 import { getUserProjectRole } from "../middleware/auth.js"
 import { getRoomIndex, getRelatedFiles, getSymbolPortion } from "./symbolIndex.js"
 import { semanticSearch } from "./retrievalService.js"
+import { isSecretPath, redactSecrets } from "./sanitize.js"
 
-// Paths that should never reach the model regardless of what the client sends.
-const SECRET_PATH_RE =
-  /(^|\/)(node_modules|\.git)(\/|$)|(^|\/)\.env([.\w]*)$|(^|\/)\.[\w-]*(secret|credential|credentials)[\w.-]*$|(^|\/)(\.aws|\.ssh|\.config)(\/|$)|(^|\/)(id_rsa|id_ed25519|\.npmrc|\.pgpass|\.netrc|\.git-credentials)$/i
-
-// Redact obvious secret assignments inside otherwise-safe file content.
-const SECRET_LINE_RE =
-  /\b(password|passwd|secret|client_?secret|api[_-]?key|apikey|access[_-]?key|refresh[_-]?token|auth[_-]?token|bearer|private[_-]?key|database[_-]?url)\b\s*[:=]\s*["'][^"']{4,}["']/gi
-
-function redactSecrets(content) {
-  return String(content || "").replace(SECRET_LINE_RE, (match) =>
-    match.replace(/[:=]\s*["'][^"']*["']/i, ': "<redacted>"')
-  )
-}
-
-function isSecretPath(p) {
-  return SECRET_PATH_RE.test(String(p || ""))
-}
+const MAX_SERVER_FILE_CHARS = 40000
+const MAX_SERVER_TAB_CHARS = 20000
+const MAX_SERVER_SELECTION_CHARS = 20000
+const MAX_SERVER_HISTORY_CHARS = 8000
 
 // Enrich the client-provided snapshot with project metadata, role info, git
 // status, and sanitization. Never trusts the client blindly for access.
@@ -40,14 +28,14 @@ export async function buildContext({ roomId, project, userId, clientSnapshot = {
     context.currentFile = {
       path: currentFile.path.slice(0, 500),
       language: typeof currentFile.language === "string" ? currentFile.language : "plaintext",
-      content: redactSecrets(String(currentFile.content || "")),
+      content: redactSecrets(String(currentFile.content || "").slice(0, MAX_SERVER_FILE_CHARS)),
     }
   }
 
   const selection = clientSnapshot.selection
   if (selection && typeof selection.text === "string" && selection.text.trim()) {
     context.selection = {
-      text: redactSecrets(selection.text.slice(0, 20000)),
+      text: redactSecrets(selection.text.slice(0, MAX_SERVER_SELECTION_CHARS)),
       startLine: Number(selection.startLine) || 0,
       endLine: Number(selection.endLine) || 0,
     }
@@ -68,7 +56,7 @@ export async function buildContext({ roomId, project, userId, clientSnapshot = {
         .map((t) => ({
           path: t.path.slice(0, 500),
           language: t.language || "plaintext",
-          content: redactSecrets(String(t.content || "").slice(0, 20000)),
+          content: redactSecrets(String(t.content || "").slice(0, MAX_SERVER_TAB_CHARS)),
         }))
     : []
 
@@ -84,7 +72,7 @@ export async function buildContext({ roomId, project, userId, clientSnapshot = {
     ? clientSnapshot.history
         .slice(-20)
         .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-        .map((m) => ({ role: m.role, content: redactSecrets(m.content.slice(0, 8000)) }))
+        .map((m) => ({ role: m.role, content: redactSecrets(m.content.slice(0, MAX_SERVER_HISTORY_CHARS)) }))
     : []
 
   const git = await getGitStatus(roomId).catch(() => null)
@@ -103,6 +91,7 @@ export async function buildContext({ roomId, project, userId, clientSnapshot = {
 
       const related = getRelatedFiles(roomId, context.currentFile.path, { limit: 2 })
       context.relatedFiles = related
+        .filter((relPath) => !isSecretPath(relPath))
         .map((relPath) => {
           const relEntry = index.get(relPath)
           if (!relEntry) return null
@@ -110,7 +99,7 @@ export async function buildContext({ roomId, project, userId, clientSnapshot = {
           let portions = []
           if (imported?.names?.length) {
             portions = imported.names
-              .map((name) => ({ name, code: getSymbolPortion(roomId, relPath, name) }))
+              .map((name) => ({ name, code: redactSecrets(getSymbolPortion(roomId, relPath, name)) }))
               .filter((p) => p.code)
           }
           return {

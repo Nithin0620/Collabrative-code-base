@@ -1,4 +1,4 @@
-import estimateTokens from "./tokenizer.js"
+import estimateTokens, { truncateMiddleByTokens } from "./tokenizer.js"
 export { estimateTokens }
 
 const SYSTEM_PROMPT = `You are an expert senior software engineer embedded in a collaborative multi-user code editor (Cursor-style assistant). You help developers understand, debug, and improve their code.
@@ -26,18 +26,19 @@ Rules:
 const MAX_SELECTION_TOKENS = 8000
 const MAX_TABS_TOKENS = 4000
 const MAX_RELATED_TOKENS = 6000
-const MAX_RETRIEVAL_TOKENS = parseInt(process.env.AI_RETRIEVAL_TOKENS || "6000", 10)
+function positiveInt(value, fallback) {
+  const n = Number.parseInt(value, 10)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
+const MAX_RETRIEVAL_TOKENS = positiveInt(process.env.AI_RETRIEVAL_TOKENS, 6000)
 const MAX_TREE_TOKENS = 3000
 const MAX_GIT_TOKENS = 400
 const MAX_QUESTION_TOKENS = 8000
 const BUDGET_RESERVE = 1024
 
 function truncateMiddle(text, maxTokens) {
-  const maxChars = maxTokens * 4
-  if (text.length <= maxChars) return text
-  const head = Math.floor(maxChars * 0.5)
-  const tail = maxChars - head
-  return text.slice(0, head) + "\n... [truncated] ...\n" + text.slice(-tail)
+  return truncateMiddleByTokens(text, maxTokens)
 }
 
 // Keep head + tail and a window around the cursor so the model still sees
@@ -161,7 +162,7 @@ function trimHistory(history, budgetTokens) {
 
 export function buildMessages(context, options = {}) {
   const maxInputTokens =
-    options.maxInputTokens || parseInt(process.env.AI_MAX_INPUT_TOKENS || "64000", 10)
+    options.maxInputTokens || positiveInt(process.env.AI_MAX_INPUT_TOKENS, 64000)
   const systemTokens = estimateTokens(SYSTEM_PROMPT)
   const question = truncateMiddle(context.question || "", MAX_QUESTION_TOKENS)
   const questionTokens = estimateTokens(question)

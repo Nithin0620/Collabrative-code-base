@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useAuth } from "../hooks/useAuth"
 
 export default function LoginPage() {
@@ -10,7 +10,7 @@ export default function LoginPage() {
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const searchParams = new URLSearchParams(window.location.search)
+  const searchParams = useMemo(() => new URLSearchParams(window.location.search), [])
   const isInvite = searchParams.get("redirect")?.includes("inviteToken")
 
   useEffect(() => {
@@ -18,7 +18,7 @@ export default function LoginPage() {
     if (urlError) {
       setError(decodeURIComponent(urlError))
     }
-  }, [])
+  }, [searchParams])
 
   const handleSubmit = async (e) => {
     e.preventDefault()

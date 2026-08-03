@@ -102,6 +102,7 @@ router.get("/:roomId", authenticateToken, async (req, res) => {
       await project.save()
     }
 
+    // Flatten Mongoose Maps to plain objects for easier consumption by the client.
     const projectObj = project.toObject({ flattenMaps: true })
     if (projectObj.settings?.password) {
       projectObj.settings.hasPassword = true
@@ -174,7 +175,7 @@ router.post("/:roomId/save", authenticateToken, requireRoomAccess, async (req, r
 
 router.post("/:roomId/snapshot", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
-    const { data, label, message, author, authorAvatar, filesCount, fileNames } = req.body
+    const { data, label, message, filesCount, fileNames } = req.body
 
     const project = await Project.findOne({ roomId: req.params.roomId })
     if (!project) {
@@ -199,9 +200,9 @@ router.post("/:roomId/snapshot", authenticateToken, requireRoomAccess, async (re
       console.warn("[snapshot] git backup failed:", err.message)
     }
 
-    project.history.push({
-      data, label: label || "", message: message || "",
-      author: author || "", authorAvatar: authorAvatar || "",
+      project.history.push({
+        data, label: label || "", message: message || "",
+      author: req.user.username || "", authorAvatar: req.user.avatar || "",
       filesCount: filesCount || 0, fileNames: fileNames || [],
       gitCommit: gitCommit || null,
     })

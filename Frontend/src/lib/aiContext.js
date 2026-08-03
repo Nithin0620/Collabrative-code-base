@@ -20,7 +20,7 @@ export function getFilePath(fileId, tree) {
   return buildPath(fileId, tree).join("/")
 }
 
-function buildTreePaths(tree) {
+function buildTreePaths(tree, limit = MAX_TREE_ENTRIES) {
   const paths = []
   const items = Object.values(tree || {})
   const childrenMap = {}
@@ -31,7 +31,9 @@ function buildTreePaths(tree) {
   })
 
   const walk = (parentKey, parts) => {
+    if (paths.length >= limit) return
     for (const child of childrenMap[parentKey] || []) {
+      if (paths.length >= limit) return
       const rel = [...parts, child.name].join("/")
       if (child.type === "file") paths.push(rel)
       else walk(child.id, [...parts, child.name])
@@ -42,7 +44,9 @@ function buildTreePaths(tree) {
 }
 
 // Keep head + tail and a window around the cursor so huge buffers stay within
-// the payload budget while the model still sees signatures and endings.
+// the payload budget while the model still sees signatures and endings. Each
+// segment is capped by its own budget so a single very long line cannot blow
+// past maxChars.
 function truncateFileContent(content, cursorLine, maxChars) {
   if (content.length <= maxChars) return content
 
@@ -53,21 +57,25 @@ function truncateFileContent(content, cursorLine, maxChars) {
   let head = ""
   let i = 0
   while (i < lines.length && head.length < headChars) {
-    head += lines[i] + "\n"
+    const line = lines[i] + "\n"
+    head += line.length <= headChars - head.length ? line : line.slice(0, headChars - head.length)
     i++
   }
 
   let tail = ""
   let j = lines.length - 1
   while (j > i && tail.length < tailChars) {
-    tail = lines[j] + "\n" + tail
+    const line = lines[j] + "\n"
+    tail = line.length <= tailChars - tail.length ? line + tail : line.slice(0, tailChars - tail.length) + tail
     j--
   }
 
   const cursorIdx = Math.max(0, (cursorLine || 1) - 1)
   const from = Math.max(i, cursorIdx - 40)
   const to = Math.min(j + 1, cursorIdx + 41)
-  const middle = lines.slice(from, to).join("\n")
+  const middleRaw = lines.slice(from, to).join("\n")
+  const middleBudget = Math.max(0, maxChars - head.length - tail.length - 16)
+  const middle = middleRaw.length <= middleBudget ? middleRaw : middleRaw.slice(0, middleBudget)
 
   return (
     (head ? head + "\n... [truncated] ...\n" : "") +
@@ -114,7 +122,7 @@ export function buildContextSnapshot({ roomId, question, ydoc, fileTree, selecte
       })
       .filter(Boolean)
       .slice(0, 20),
-    fileTree: buildTreePaths(fileTree).slice(0, MAX_TREE_ENTRIES),
+    fileTree: buildTreePaths(fileTree, MAX_TREE_ENTRIES),
     history: (history || []).slice(-12),
   }
 

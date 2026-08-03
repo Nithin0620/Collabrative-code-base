@@ -3,7 +3,7 @@ import Project from "../models/Project.js"
 import AIEdit from "../models/AIEdit.js"
 import AIConversation from "../models/AIConversation.js"
 import { authenticateToken, requireRoomAccess, getUserProjectRole } from "../middleware/auth.js"
-import { initSSE, sendSSE, sendDone, sendSSEError } from "../utils/sse.js"
+import { initSSE, sendSSE, sendDone, sendSSEError, trackClientDisconnect } from "../utils/sse.js"
 import { streamGroqChat } from "../services/groqClient.js"
 import { buildContext } from "../services/contextBuilder.js"
 import { buildMessages, estimateTokens } from "../services/promptBuilder.js"
@@ -12,6 +12,7 @@ import { rebuildRoomVectors } from "../services/retrievalService.js"
 import { checkRateLimit } from "../utils/rateLimit.js"
 import { semanticSearch } from "../services/retrievalService.js"
 import { isEmbeddingEnabled } from "../services/embeddingService.js"
+import { DEFAULT_MODEL, GROQ_MAX_TOKENS, MAX_AI_CONVERSATION_MESSAGES } from "../config/ai.js"
 import {
   runAgent,
   getProposal,
@@ -24,28 +25,27 @@ import { syncProjectToDisk } from "../utils/projectSync.js"
 
 const router = Router()
 
-const DEFAULT_MODEL = "llama-3.3-70b-versatile"
-
 // Models users can pick from in the AI panel. The env default is always first;
 // the active selection is validated against this list before being sent to Groq.
+// List only model IDs currently served by Groq (retired IDs removed).
 const GROQ_MODELS = Array.from(
   new Set([
-    process.env.GROQ_MODEL || DEFAULT_MODEL,
+    DEFAULT_MODEL,
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
-    "llama-3.3-70b-specdec",
-    "llama-3.1-70b-versatile",
-    "mixtral-8x7b-32768",
-    "gemma2-9b-it",
   ])
 )
 
-function resolveModel(requested) {
-  const pick = String(requested || "").trim()
-  return GROQ_MODELS.includes(pick) ? pick : process.env.GROQ_MODEL || DEFAULT_MODEL
+function boundedPositiveInt(value, fallback, max) {
+  const n = Number.parseInt(value, 10)
+  if (!Number.isFinite(n) || n < 1) return fallback
+  return Math.min(n, max)
 }
 
-const MAX_STORED_MESSAGES = 200
+function resolveModel(requested) {
+  const pick = String(requested || "").trim()
+  return GROQ_MODELS.includes(pick) ? pick : DEFAULT_MODEL
+}
 
 async function appendConversation({ roomId, userId, userName, turns }) {
   const extra = turns.map((t) => ({ role: t.role, content: t.content, agent: !!t.agent }))
@@ -53,8 +53,8 @@ async function appendConversation({ roomId, userId, userName, turns }) {
   await AIConversation.findOneAndUpdate(
     { roomId, userId },
     {
-      $push: { messages: { $each: extra, $slice: -MAX_STORED_MESSAGES } },
-      $set: { userName: userName || "", updatedAt: new Date() },
+      $push: { messages: { $each: extra, $slice: -MAX_AI_CONVERSATION_MESSAGES } },
+      $set: { userName: userName || "" },
     },
     { upsert: true, setDefaultsOnInsert: true }
   )
@@ -63,7 +63,7 @@ async function appendConversation({ roomId, userId, userName, turns }) {
 router.get("/config", (req, res) => {
   res.json({
     enabled: !!process.env.GROQ_API_KEY,
-    model: process.env.GROQ_MODEL || DEFAULT_MODEL,
+    model: DEFAULT_MODEL,
     models: GROQ_MODELS,
     searchEnabled: isEmbeddingEnabled(),
   })
@@ -77,6 +77,15 @@ router.post("/context/:roomId", authenticateToken, requireRoomAccess, async (req
     const project = await Project.findOne({ roomId })
     if (!project) {
       return res.status(404).json({ message: "Project not found" })
+    }
+
+    const rl = await checkRateLimit(req.user._id.toString(), roomId)
+    if (!rl.ok) {
+      const retryAfter = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))
+      return res.status(429).json({
+        message: "You are sending requests too quickly. Please wait a moment and try again.",
+        retryAfter,
+      })
     }
 
     const context = await buildContext({
@@ -117,7 +126,7 @@ router.post("/:roomId/search", authenticateToken, requireRoomAccess, async (req,
     }
 
     const results = await semanticSearch(roomId, project, query, {
-      topK: Math.min(Number(req.body?.topK) || 5, 20),
+      topK: boundedPositiveInt(req.body?.topK, 5, 20),
     })
 
     if (!results) {
@@ -189,10 +198,7 @@ router.post("/:roomId/agent", authenticateToken, requireRoomAccess, async (req, 
       meta: { model, mode: "agent", canEdit },
     })
 
-    const controller = new AbortController()
-    req.on("close", () => {
-      if (!res.writableEnded) controller.abort()
-    })
+    const controller = trackClientDisconnect(req, res)
 
     let agentContent = ""
 
@@ -221,15 +227,19 @@ router.post("/:roomId/agent", authenticateToken, requireRoomAccess, async (req, 
         sendSSE(res, { usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } })
       }
       sendDone(res)
-      appendConversation({
-        roomId,
-        userId: req.user._id.toString(),
-        userName: req.user.username || "",
-        turns: [
-          { role: "user", content: question },
-          { role: "assistant", content: agentContent, agent: true },
-        ],
-      }).catch((err) => console.warn("[ai] conversation save failed:", err.message))
+      try {
+        await appendConversation({
+          roomId,
+          userId: req.user._id.toString(),
+          userName: req.user.username || "",
+          turns: [
+            { role: "user", content: question },
+            { role: "assistant", content: agentContent, agent: true },
+          ],
+        })
+      } catch (err) {
+        console.error("[ai] conversation save failed:", err.message)
+      }
     } catch (err) {
       if (controller.signal.aborted) return
       sendSSEError(res, err)
@@ -272,15 +282,16 @@ router.post("/:roomId/apply", authenticateToken, requireRoomAccess, async (req, 
       return res.status(409).json({ message: "No live editor session for this room. Please open the room first." })
     }
 
-    const tree =
-      project.fileTree instanceof Map
-        ? Object.fromEntries(project.fileTree)
-        : Object.fromEntries(Object.entries(project.fileTree || {}))
-    const fileId = buildPathIdMap(tree).get(proposal.path)
+    const yTree = yDoc.getMap("fileTree")
+    const liveTree = {}
+    yTree.forEach((value, key) => {
+      liveTree[key] = value
+    })
+    const fileId = buildPathIdMap(liveTree).get(proposal.path)
     const isCreate = proposal.mode === "create" || !fileId
 
     let appliedFileId = fileId
-    let resultTree = tree
+    let resultTree = liveTree
     if (!isCreate) {
       // --- Edit existing file ------------------------------------------------
       if (!fileId) {
@@ -297,12 +308,14 @@ router.post("/:roomId/apply", authenticateToken, requireRoomAccess, async (req, 
         yText.insert(0, proposal.newContent)
       })
 
-      // Persist the single file so Mongo/disk/git catch up (fire-and-forget).
+      // Persist the single file so Mongo/disk/git catch up.
       await Project.findOneAndUpdate(
         { roomId },
         { $set: { "files.$[f].content": proposal.newContent, updatedAt: new Date() } },
         { arrayFilters: [{ "f.id": fileId }] }
-      ).catch(() => {})
+      ).catch((err) => {
+        console.error("[ai] project file content update failed after apply:", err.message)
+      })
     } else {
       // --- Create new file (and any missing folders) -------------------------
       if (fileId) {
@@ -315,12 +328,11 @@ router.post("/:roomId/apply", authenticateToken, requireRoomAccess, async (req, 
         return res.status(400).json({ message: "Invalid file path" })
       }
 
-      const yTree = yDoc.getMap("fileTree")
       const newNodes = {} // nodes to add to the shared tree
       let parentId = null
       for (const seg of segments) {
         let nodeId = null
-        for (const [id, item] of Object.entries(tree)) {
+        for (const [id, item] of Object.entries(liveTree)) {
           if (item && item.type === "folder" && item.name === seg && (item.parentId || null) === (parentId || null)) {
             nodeId = id
             break
@@ -343,7 +355,9 @@ router.post("/:roomId/apply", authenticateToken, requireRoomAccess, async (req, 
         yDoc.getText("file:" + newFileId).insert(0, proposal.newContent)
       })
 
-      const treeMap = new Map(Object.entries(tree))
+      // Merge onto the live tree (source of truth) so collaborators' recent
+      // file/folder changes are not lost when persisting to Mongo.
+      const treeMap = new Map(Object.entries(liveTree))
       for (const [id, node] of Object.entries(newNodes)) {
         treeMap.set(id, node)
       }
@@ -354,7 +368,9 @@ router.post("/:roomId/apply", authenticateToken, requireRoomAccess, async (req, 
           $set: { fileTree: treeMap, updatedAt: new Date() },
           $push: { files: { id: newFileId, content: proposal.newContent, language: languageFromName(fileName) } },
         }
-      ).catch(() => {})
+      ).catch((err) => {
+        console.error("[ai] project new file creation failed after apply:", err.message)
+      })
 
       appliedFileId = newFileId
     }
@@ -363,11 +379,11 @@ router.post("/:roomId/apply", authenticateToken, requireRoomAccess, async (req, 
     const files = buildFilesFromYDoc(yDoc, resultTree)
     const index = rebuildRoomIndex(roomId, resultTree, files)
     rebuildRoomVectors(roomId, index).catch((err) => {
-      console.warn("[retrieval] vector rebuild after apply failed:", err.message)
+      console.error("[retrieval] vector rebuild after apply failed:", err.message)
     })
 
     syncProjectToDisk(roomId).catch((err) => {
-      console.warn("[ai] disk sync after apply failed:", err.message)
+      console.error("[ai] disk sync after apply failed:", err.message)
     })
 
     AIEdit.create({
@@ -379,7 +395,7 @@ router.post("/:roomId/apply", authenticateToken, requireRoomAccess, async (req, 
       oldContent: proposal.oldContent,
       newContent: proposal.newContent,
     }).catch((err) => {
-      console.warn("[ai] audit log failed:", err.message)
+      console.error("[ai] audit log failed:", err.message)
     })
 
     takeProposal(roomId, proposal.id)
@@ -430,15 +446,11 @@ router.post("/:roomId/chat", authenticateToken, requireRoomAccess, async (req, r
 
     const { messages, usage } = buildMessages(context)
     const model = resolveModel(req.body?.model)
-    const maxTokens = parseInt(process.env.GROQ_MAX_TOKENS || "2048", 10)
 
     initSSE(res)
     sendSSE(res, { meta: { model, inputTokens: usage.inputTokens } })
 
-    const controller = new AbortController()
-    req.on("close", () => {
-      if (!res.writableEnded) controller.abort()
-    })
+    const controller = trackClientDisconnect(req, res)
 
     let chatContent = ""
 
@@ -447,7 +459,7 @@ router.post("/:roomId/chat", authenticateToken, requireRoomAccess, async (req, r
         messages,
         model,
         temperature: 0.3,
-        maxTokens,
+        maxTokens: GROQ_MAX_TOKENS,
         signal: controller.signal,
         onToken: (delta) => {
           chatContent += delta
@@ -458,15 +470,19 @@ router.post("/:roomId/chat", authenticateToken, requireRoomAccess, async (req, r
       const outputTokens = estimateTokens(chatContent)
       sendSSE(res, { usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } })
       sendDone(res)
-      appendConversation({
-        roomId,
-        userId: req.user._id.toString(),
-        userName: req.user.username || "",
-        turns: [
-          { role: "user", content: context.question },
-          { role: "assistant", content: chatContent, agent: false },
-        ],
-      }).catch((err) => console.warn("[ai] conversation save failed:", err.message))
+      try {
+        await appendConversation({
+          roomId,
+          userId: req.user._id.toString(),
+          userName: req.user.username || "",
+          turns: [
+            { role: "user", content: context.question },
+            { role: "assistant", content: chatContent, agent: false },
+          ],
+        })
+      } catch (err) {
+        console.error("[ai] conversation save failed:", err.message)
+      }
     } catch (err) {
       if (controller.signal.aborted) return
       sendSSEError(res, err)

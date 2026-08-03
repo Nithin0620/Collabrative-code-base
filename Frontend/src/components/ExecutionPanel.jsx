@@ -51,7 +51,7 @@ export default function ExecutionPanel({
       handleRunAllTests(testCases)
       if (onTestCasesConsumed) onTestCasesConsumed()
     }
-  }, [testCases])
+  }, [testCases, code, handleRunAllTests, onTestCasesConsumed])
 
   useEffect(() => {
     if (outputRef.current) {

@@ -1,21 +1,35 @@
 import { diffLines } from "diff"
 import { getGitStatus, getGitDiffStat } from "../utils/projectSync.js"
 import estimateTokens from "./tokenizer.js"
+import { languageFromName } from "./languageMap.js"
+import { isSecretPath } from "./sanitize.js"
+import {
+  DEFAULT_MODEL,
+  GROQ_BASE_URL,
+  GROQ_TIMEOUT_MS,
+  GROQ_MAX_TOKENS,
+  AGENT_MAX_TURNS,
+  MAX_EDIT_CHARS,
+  MAX_GREP_MATCHES,
+  MAX_TOOL_OUTPUT_CHARS,
+  MAX_AGENT_INPUT_CHARS,
+  PENDING_EDIT_TTL_MS,
+} from "../config/ai.js"
 
 // Phase 4: an autonomous coding agent. Uses Groq function calling in a bounded
 // tool loop (read_file / list_files / grep_symbol / get_git_diff / apply_edit).
 // Edits are NOT applied directly: apply_edit creates a "proposal" that the
 // client previews and approves via /apply before it touches the live Yjs doc.
 
-const AGENT_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile"
-const GROQ_BASE_URL = process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1"
-const GROQ_TIMEOUT_MS = parseInt(process.env.GROQ_TIMEOUT_MS || "120000", 10)
-const AGENT_MAX_TURNS = parseInt(process.env.AI_AGENT_MAX_TURNS || "8", 10)
-const MAX_EDIT_CHARS = 200000
-const MAX_GREP_MATCHES = 60
-
 // In-memory store of edit proposals: roomId -> Map<proposalId, proposal>.
+// NOTE: this is a per-process store. For multi-instance (horizontally scaled)
+// deployments, pendingEdits must move to a shared store such as Redis.
 const pendingEdits = new Map()
+
+const DIFF_CONTEXT_LINES = 3
+const MAX_DIFF_CONTEXT_LINES = 30
+const MAX_DIFF_LINES = 200
+const MAX_GREP_PATTERN_CHARS = 200
 
 export const AGENT_TOOLS = [
   {
@@ -131,10 +145,24 @@ Rules:
 - Answer in markdown. Never output secrets or credentials.`
 
 function safeParse(json) {
+  if (!json) return {}
   try {
-    return JSON.parse(json || "{}")
-  } catch {
-    return {}
+    return JSON.parse(json)
+  } catch (e) {
+    console.error("[agent] tool arguments failed to parse:", e.message, "payload:", String(json).slice(0, 200))
+    return null
+  }
+}
+
+function pruneExpiredProposals(roomId) {
+  const now = Date.now()
+  const rooms = roomId ? [[roomId, pendingEdits.get(roomId)]] : pendingEdits.entries()
+  for (const [key, proposals] of rooms) {
+    if (!proposals) continue
+    for (const [id, proposal] of proposals) {
+      if (now - (proposal.createdAt || 0) > PENDING_EDIT_TTL_MS) proposals.delete(id)
+    }
+    if (!proposals.size) pendingEdits.delete(key)
   }
 }
 
@@ -183,26 +211,14 @@ function validateProjectPath(path) {
   if (!path || typeof path !== "string") return "path is required"
   const cleaned = path.replace(/\\/g, "/")
   if (cleaned.startsWith("/")) return "path must be project-relative (no leading /)"
+  if (/^[A-Za-z]:/.test(cleaned)) return "path must be project-relative (no drive prefix)"
+  if (/[\u0000-\u001f]/.test(cleaned)) return "path contains control characters"
   const parts = cleaned.split("/")
   for (const part of parts) {
     if (!part) return "path contains an empty segment (check for trailing slashes)"
     if (part === "." || part === "..") return `path segment "${part}" is not allowed`
   }
   return null
-}
-
-const EXT_LANGUAGE_MAP = {
-  js: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript",
-  py: "python", rb: "ruby", java: "java", cpp: "cpp", c: "c", h: "c",
-  go: "go", rs: "rust", html: "html", css: "css", scss: "scss",
-  json: "json", md: "markdown", txt: "plaintext", yaml: "yaml", yml: "yaml",
-  xml: "xml", sql: "sql", sh: "shell", bash: "shell", dockerfile: "dockerfile",
-  toml: "ini",
-}
-
-function languageFromName(filename) {
-  const ext = String(filename || "").split(".").pop()?.toLowerCase() || ""
-  return EXT_LANGUAGE_MAP[ext] || "plaintext"
 }
 
 function buildDiffText(oldText, newText) {
@@ -225,18 +241,18 @@ function buildDiffText(oldText, newText) {
       for (const l of val.split("\n")) lines.push("- " + l)
       context = 0
     } else {
-      const kept = val.split("\n").slice(0, 3)
+      const kept = val.split("\n").slice(0, DIFF_CONTEXT_LINES)
       for (const l of kept) lines.push("  " + l)
-      if (part.count > 3) {
-        lines.push(`  ... (${part.count - 3} unchanged lines)`)
+      if (part.count > DIFF_CONTEXT_LINES) {
+        lines.push(`  ... (${part.count - DIFF_CONTEXT_LINES} unchanged lines)`)
       }
       context += part.count
-      if (context > 30) {
+      if (context > MAX_DIFF_CONTEXT_LINES) {
         lines.push("  ... (more unchanged lines)")
         context = 0
       }
     }
-    if (lines.length > 200) {
+    if (lines.length > MAX_DIFF_LINES) {
       lines.push("... (diff truncated)")
       break
     }
@@ -251,10 +267,10 @@ async function callGroq({ messages, tools, signal, onDelta, model }) {
   if (!apiKey) throw new Error("AI assistant is not configured (missing GROQ_API_KEY)")
 
   const body = {
-    model: model || AGENT_MODEL,
+    model: model || DEFAULT_MODEL,
     messages,
     temperature: 0.2,
-    max_tokens: parseInt(process.env.GROQ_MAX_TOKENS || "4096", 10),
+    max_tokens: GROQ_MAX_TOKENS,
     stream: true,
   }
   if (tools?.length) body.tools = tools
@@ -298,6 +314,9 @@ async function callGroq({ messages, tools, signal, onDelta, model }) {
         json = JSON.parse(payload)
       } catch {
         continue
+      }
+      if (json.error) {
+        throw new Error(json.error.message || json.error || "AI stream error")
       }
       const delta = json.choices?.[0]?.delta
       if (delta?.content) {
@@ -351,27 +370,26 @@ async function executeTool(name, args, ctx) {
       return { path, startLine: start, endLine: end, content: lines.slice(start - 1, end).join("\n") }
     }
     case "grep_symbol": {
-      const pattern = String(args.pattern || "")
+      const pattern = String(args.pattern || "").slice(0, MAX_GREP_PATTERN_CHARS)
       if (!pattern) return { error: "A pattern is required" }
-      let re
-      try {
-        re = new RegExp(pattern)
-      } catch {
-        re = null
-      }
+      const needle = pattern.toLowerCase()
       const matches = []
+      let truncated = false
       for (const [path, content] of contentByPath) {
         const lines = content.split("\n")
         for (let i = 0; i < lines.length; i++) {
-          const ok = re ? re.test(lines[i]) : lines[i].includes(pattern)
+          const ok = lines[i].toLowerCase().includes(needle)
           if (ok) {
             matches.push({ path, line: i + 1, text: lines[i].slice(0, 200) })
-            if (matches.length >= MAX_GREP_MATCHES) break
+            if (matches.length >= MAX_GREP_MATCHES) {
+              truncated = true
+              break
+            }
           }
         }
         if (matches.length >= MAX_GREP_MATCHES) break
       }
-      return { matches, count: matches.length }
+      return { matches, count: matches.length, truncated }
     }
     case "get_git_diff": {
       const git = await getGitStatus(roomId).catch(() => null)
@@ -423,6 +441,13 @@ async function executeTool(name, args, ctx) {
       if (oldContent.indexOf(oldString, occurrence + 1) !== -1) {
         return { error: "oldString is ambiguous: it appears more than once in the file. Include more surrounding context so it matches exactly once." }
       }
+      if (/^[\w$]+$/.test(oldString)) {
+        const before = oldContent[occurrence - 1]
+        const after = oldContent[occurrence + oldString.length]
+        if ((before && /[\w$]/.test(before)) || (after && /[\w$]/.test(after))) {
+          return { error: "oldString matches part of a larger identifier. Include more surrounding characters so it matches exactly once." }
+        }
+      }
       if (oldString === newString) return { error: "No changes detected: oldString and newString are identical." }
 
       const newContent = oldContent.slice(0, occurrence) + newString + oldContent.slice(occurrence + oldString.length)
@@ -452,10 +477,12 @@ async function executeTool(name, args, ctx) {
 // ---- public API ---------------------------------------------------------------
 
 export function getProposal(roomId, proposalId) {
+  pruneExpiredProposals(roomId)
   return pendingEdits.get(roomId)?.get(proposalId) || null
 }
 
 export function takeProposal(roomId, proposalId) {
+  pruneExpiredProposals(roomId)
   const map = pendingEdits.get(roomId)
   if (!map) return null
   const proposal = map.get(proposalId)
@@ -484,6 +511,7 @@ export async function runAgent({
   onTool,
   onProposal,
 }) {
+  pruneExpiredProposals()
   const canEdit = !!role && role !== "viewer" && !readOnly
 
   const tree =
@@ -491,13 +519,20 @@ export async function runAgent({
       ? Object.fromEntries(project.fileTree)
       : Object.fromEntries(Object.entries(project.fileTree || {}))
   const contentByPath = buildContentByPath(tree, project.files || [])
+  const safeQuestion = String(question || "").trim().slice(0, MAX_AGENT_INPUT_CHARS)
+  const safeHistory = (history || [])
+    .slice(-10)
+    .filter((m) => m && (m.role === "user" || m.role === "assistant"))
+    .map((m) => ({ role: m.role, content: String(m.content || "").slice(0, MAX_AGENT_INPUT_CHARS) }))
 
   const messages = [
     { role: "system", content: AGENT_SYSTEM_PROMPT },
-    ...(history || []).slice(-10).filter((m) => m && (m.role === "user" || m.role === "assistant")),
-    { role: "user", content: String(question || "").trim() },
+    ...safeHistory,
+    { role: "user", content: safeQuestion },
   ]
-  const tools = canEdit ? AGENT_TOOLS : AGENT_TOOLS.filter((t) => t.function.name !== "apply_edit")
+  const tools = canEdit
+    ? AGENT_TOOLS
+    : AGENT_TOOLS.filter((t) => t.function.name !== "apply_edit" && t.function.name !== "create_file")
 
   let inputTokens = 0
   let outputTokens = 0
@@ -512,10 +547,15 @@ export async function runAgent({
     messages.push({ role: "assistant", content: content || null, tool_calls: toolCalls })
     for (const tc of toolCalls) {
       const name = tc.function.name
-      const args = safeParse(tc.function.arguments)
+      const args = safeParse(tc.function.arguments) || {}
       onTool?.({ name, args })
       const output = await executeTool(name, args, { roomId, contentByPath, canEdit, onProposal })
-      messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(output).slice(0, 12000) })
+      let toolOutput = JSON.stringify(output)
+      if (toolOutput.length > MAX_TOOL_OUTPUT_CHARS) {
+        console.warn(`[agent] tool "${name}" output truncated (${toolOutput.length} chars, max ${MAX_TOOL_OUTPUT_CHARS})`)
+        toolOutput = toolOutput.slice(0, MAX_TOOL_OUTPUT_CHARS - 40) + "\n...[output truncated; ask for a narrower result]"
+      }
+      messages.push({ role: "tool", tool_call_id: tc.id, content: toolOutput })
     }
   }
 

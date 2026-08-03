@@ -54,6 +54,9 @@ export async function streamGroqChat({ messages, model, temperature = 0.3, maxTo
       } catch {
         continue
       }
+      if (json.error) {
+        throw new Error(json.error.message || json.error || "AI stream error")
+      }
       const delta = json.choices?.[0]?.delta?.content
       if (typeof delta === "string" && delta.length > 0) {
         onToken?.(delta)

@@ -1,4 +1,5 @@
 import Project from "../models/Project.js"
+import { isSecretPath, redactSecrets } from "./sanitize.js"
 
 // In-memory per-room index of symbols and imports. Rebuilt on save and lazily
 // from Mongo on first request. Keyed by roomId -> relative path -> entry.
@@ -90,6 +91,20 @@ function extractSymbols(language, content) {
   const symbols = []
   const seen = new Set()
   const patterns = SYMBOL_PATTERNS[language] || []
+  const newlineOffsets = []
+  for (let i = 0; i < content.length; i++) {
+    if (content.charCodeAt(i) === 10) newlineOffsets.push(i)
+  }
+  const lineForOffset = (offset) => {
+    let lo = 0
+    let hi = newlineOffsets.length
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      if (newlineOffsets[mid] < offset) lo = mid + 1
+      else hi = mid
+    }
+    return lo + 1
+  }
   for (const { type, re } of patterns) {
     re.lastIndex = 0
     let match
@@ -97,7 +112,7 @@ function extractSymbols(language, content) {
       const name = match[1]
       if (!name || seen.has(name)) continue
       seen.add(name)
-      const line = content.slice(0, match.index).split("\n").length
+      const line = lineForOffset(match.index)
       symbols.push({ name, type, line })
     }
   }
@@ -198,7 +213,8 @@ function buildRoomIndex(roomId, fileTree, files, updatedAt) {
 
   const index = new Map()
   for (const [rel, item] of pathMap) {
-    const content = contentById.get(String(item.id)) || ""
+    if (isSecretPath(rel)) continue
+    const content = redactSecrets(contentById.get(String(item.id)) || "")
     const language = getLanguage(item.name)
     const imports = extractImports(language, content).map((imp) => ({
       ...imp,

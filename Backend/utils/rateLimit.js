@@ -1,8 +1,24 @@
 import { getRedisClient } from "./redis.js"
 
 const WINDOW_MS = 5 * 60 * 1000
+const DEFAULT_LIMIT = 20
 const memBuckets = new Map()
 let memWrites = 0
+
+// Increment a key and set its TTL atomically on first use, so a concurrent
+// burst cannot create a key that is never expired.
+const INCR_EXPIRE_LUA = `
+local count = redis.call("INCR", KEYS[1])
+if count == 1 then
+  redis.call("EXPIRE", KEYS[1], ARGV[1])
+end
+return count
+`
+
+function normalizeLimit(raw) {
+  const n = Number.parseInt(raw, 10)
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_LIMIT
+}
 
 function memCheck(key, limit, now = Date.now()) {
   if (memWrites >= 1000) {
@@ -25,14 +41,13 @@ function memCheck(key, limit, now = Date.now()) {
 }
 
 export async function checkRateLimit(userId, roomId) {
-  const limit = parseInt(process.env.AI_RATE_LIMIT || "20", 10)
+  const limit = normalizeLimit(process.env.AI_RATE_LIMIT)
   const key = `ai:rl:${userId}:${roomId}`
   const redis = getRedisClient()
 
   if (redis) {
     try {
-      const count = await redis.incr(key)
-      if (count === 1) await redis.expire(key, WINDOW_MS / 1000)
+      const count = await redis.eval(INCR_EXPIRE_LUA, 1, key, Math.ceil(WINDOW_MS / 1000))
       if (count > limit) {
         const ttl = await redis.ttl(key)
         return { ok: false, remaining: 0, resetAt: Date.now() + Math.max(0, ttl) * 1000 }

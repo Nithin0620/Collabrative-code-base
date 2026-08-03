@@ -148,7 +148,7 @@ function TerminalInstance({ terminalId, roomId, socket, isActive, onReady }) {
       term.dispose()
       isReadyRef.current = false
     }
-  }, [terminalId, roomId, socket, requestPorts])
+  }, [terminalId, roomId, socket, requestPorts, onReady])
 
   // Focus when active
   useEffect(() => {
@@ -221,7 +221,7 @@ export default function TerminalPanel({ socket, roomId, visible = true, onClose,
       }
       return next
     })
-  }, [activeTermId, socket, onClose])
+  }, [activeTermId, socket])
 
   // Resize panel by dragging top edge
   const handleResizeStart = useCallback((e) => {

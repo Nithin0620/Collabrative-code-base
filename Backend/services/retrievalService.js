@@ -5,6 +5,7 @@ import { embed, isEmbeddingEnabled } from "./embeddingService.js"
 // Per-room in-memory vector store: roomId -> { chunks, vectors, updatedAt }.
 // A Redis/vector-DB swap is hidden behind this module's interface.
 const roomVectors = new Map()
+const MAX_ROOMS = 50 // evict least-recently-rebuilt rooms when exceeded
 
 const WINDOW = 100 // lines per fixed-size chunk
 const OVERLAP = 20 // overlapping lines between windows
@@ -12,6 +13,7 @@ const MAX_CHUNK_LINES = 150
 const MIN_CHUNK_LINES = 8
 const MAX_CHUNK_CHARS = 12000
 const EMBED_BATCH = 64
+const MAX_TOP_K = 50
 
 function makeChunk(lines, start, end) {
   const parts = []
@@ -19,6 +21,10 @@ function makeChunk(lines, start, end) {
   let actualEnd = end
   for (let i = start; i <= end; i++) {
     const line = lines[i - 1] ?? ""
+    if (!parts.length && line.length > MAX_CHUNK_CHARS) {
+      const text = line.slice(0, MAX_CHUNK_CHARS)
+      return text.trim() ? { startLine: start, endLine: start, text } : null
+    }
     if (len + line.length + 1 > MAX_CHUNK_CHARS) {
       actualEnd = i - 1
       break
@@ -26,8 +32,9 @@ function makeChunk(lines, start, end) {
     parts.push(line)
     len += line.length + 1
   }
-  if (!parts.length) return null
-  return { startLine: start, endLine: Math.max(start, actualEnd), text: parts.join("\n") }
+  const text = parts.join("\n")
+  if (!parts.length || !text.trim()) return null
+  return { startLine: start, endLine: Math.max(start, actualEnd), text }
 }
 
 // Split file content into semantic-ish chunks: prefer symbol boundaries, merge
@@ -53,7 +60,10 @@ function chunkContent(content, symbols) {
     if (size < MIN_CHUNK_LINES) {
       const prev = chunks[chunks.length - 1]
       if (prev && prev.endLine - prev.startLine < MAX_CHUNK_LINES) {
-        prev.endLine = end
+        const merged = makeChunk(lines, prev.startLine, end)
+        if (!merged) continue
+        prev.text = merged.text
+        prev.endLine = merged.endLine
         continue
       }
     }
@@ -102,12 +112,27 @@ async function buildRoomVectors(roomId, index) {
   for (let i = 0; i < chunks.length; i += EMBED_BATCH) {
     const batch = chunks.slice(i, i + EMBED_BATCH).map((c) => c.text)
     const vecs = await embed(batch)
+    if (vecs.length !== batch.length) {
+      throw new Error("Embedding provider returned a different vector count than requested")
+    }
     vectors.push(...vecs)
   }
 
   const store = { chunks, vectors, updatedAt: Date.now() }
   roomVectors.set(roomId, store)
+  evictIfNeeded()
   return store
+}
+
+// Bound the in-memory store to MAX_ROOMS by evicting the least-recently-rebuilt
+// rooms, so long-running processes cannot leak memory for every room ever seen.
+function evictIfNeeded() {
+  if (roomVectors.size <= MAX_ROOMS) return
+  const overflow = roomVectors.size - MAX_ROOMS
+  const oldest = [...roomVectors.entries()]
+    .sort((a, b) => a[1].updatedAt - b[1].updatedAt)
+    .slice(0, overflow)
+  for (const [roomId] of oldest) roomVectors.delete(roomId)
 }
 
 // Synchronous check whether a room already has fresh vectors in memory.
@@ -145,10 +170,12 @@ export async function semanticSearch(roomId, project, query, { topK = 5 } = {}) 
   const store = await getRoomVectors(roomId, project)
   if (!store || !store.chunks.length) return null
 
+  const k = Number.isFinite(topK) ? Math.floor(topK) : 5
+  const safeTopK = Math.min(Math.max(k, 1), MAX_TOP_K)
   const [queryVec] = await embed([q])
   const scored = store.chunks.map((c, i) => ({ ...c, score: cosine(queryVec, store.vectors[i]) }))
   scored.sort((a, b) => b.score - a.score)
-  return scored.slice(0, topK).map(({ text, ...c }) => ({ ...c, score: Number(c.score.toFixed(4)) }))
+  return scored.slice(0, safeTopK).map(({ text, ...c }) => ({ ...c, score: Number(c.score.toFixed(4)) }))
 }
 
 export { chunkContent, cosine }

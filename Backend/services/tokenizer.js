@@ -1,4 +1,4 @@
-import { encode } from "gpt-tokenizer"
+import { decode, encode } from "gpt-tokenizer"
 
 // Token estimation shared by the prompt builder. Uses the GPT-4 (cl100k_base)
 // tokenizer for accuracy; falls back to the chars/4 heuristic if the package
@@ -10,5 +10,27 @@ export default function estimateTokens(text) {
     return encode(s).length
   } catch {
     return Math.ceil(s.length / 4)
+  }
+}
+
+export function truncateMiddleByTokens(text, maxTokens) {
+  const s = String(text || "")
+  if (!s) return ""
+  const limit = Math.max(1, Number.parseInt(maxTokens, 10) || 1)
+  try {
+    const tokens = encode(s)
+    if (tokens.length <= limit) return s
+    const marker = "\n... [truncated] ...\n"
+    const markerTokens = encode(marker)
+    const contentBudget = Math.max(1, limit - markerTokens.length)
+    const headCount = Math.ceil(contentBudget / 2)
+    const tailCount = Math.floor(contentBudget / 2)
+    return decode(tokens.slice(0, headCount)) + marker + decode(tokens.slice(tokens.length - tailCount))
+  } catch {
+    const maxChars = limit * 4
+    if (s.length <= maxChars) return s
+    const head = Math.floor(maxChars * 0.5)
+    const tail = maxChars - head
+    return s.slice(0, head) + "\n... [truncated] ...\n" + s.slice(-tail)
   }
 }

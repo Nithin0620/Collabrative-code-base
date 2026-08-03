@@ -1,7 +1,6 @@
 import Redis from "ioredis"
 
 let client = null
-let redisBroken = false
 
 function createClient() {
   if (process.env.REDIS_URL) {
@@ -29,19 +28,20 @@ function createClient() {
 }
 
 export function getRedisClient() {
-  if (redisBroken) return null
   if (client) return client
   try {
     client = createClient()
-    client.on("error", () => {
-      redisBroken = true
+    client.on("error", (err) => {
+      // Do not latch a permanent "broken" state: ioredis reconnects on its own,
+      // so callers keep trying and fall back to in-memory handling per command.
+      console.warn("[redis] connection error:", err?.message || err)
     })
-    client.connect().catch(() => {
-      redisBroken = true
+    client.connect().catch((err) => {
+      console.warn("[redis] connect failed:", err?.message || err)
     })
     return client
-  } catch {
-    redisBroken = true
+  } catch (err) {
+    console.warn("[redis] create failed:", err?.message || err)
     return null
   }
 }

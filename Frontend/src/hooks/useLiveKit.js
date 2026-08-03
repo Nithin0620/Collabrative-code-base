@@ -153,11 +153,12 @@ export default function useLiveKit(socket, roomId, user) {
   }, [updateLocalStream, updateRemoteStreams])
 
   useEffect(() => {
-    if (!roomId || !user) return
+    const currentUser = userRef.current
+    if (!roomId || !currentUser) return
     mountedRef.current = true
 
     const identity = userIdentity
-    const name = userRef.current?.username || userRef.current?.displayName || "User"
+    const name = currentUser.username || currentUser.displayName || "User"
 
     fetch("/api/livekit/token", {
       method: "POST",

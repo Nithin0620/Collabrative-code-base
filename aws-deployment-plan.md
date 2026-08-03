@@ -231,8 +231,8 @@ resource "aws_ecr_lifecycle_policy" "cleanup" {
       { "name": "CLIENT_URL", "value": "https://app.example.com" }
     ],
     "secrets": [
-      { "name": "MONGODB_URI", "valueFrom": "arn:aws:secretsmanager:...:secret:collab/prod/env" },
-      { "name": "JWT_SECRET", "valueFrom": "arn:aws:secretsmanager:...:secret:collab/prod/env" }
+      { "name": "MONGODB_URI", "valueFrom": "arn:aws:secretsmanager:...:secret:collab/prod/env:MONGODB_URI::" },
+      { "name": "JWT_SECRET", "valueFrom": "arn:aws:secretsmanager:...:secret:collab/prod/env:JWT_SECRET::" }
       # … every secret from Part D …
     ],
     "mountPoints": [{

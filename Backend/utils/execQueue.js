@@ -39,6 +39,10 @@ function createWorker(executeCode, io) {
       const { executionId, userId, roomId, language, code, stdin } = job.data
       const room = `exec:${executionId}`
 
+      await Execution.findOneAndUpdate(
+        { executionId },
+        { status: "running" },
+      )
       io.to(room).emit("exec:started", { executionId })
 
       try {

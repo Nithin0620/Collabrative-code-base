@@ -24,3 +24,13 @@ export function sendSSEError(res, error) {
   res.write(`data: ${JSON.stringify({ error: error?.message || String(error) })}\n\n`)
   res.end()
 }
+
+// Wire up an AbortController that fires when the client disconnects before the
+// response finished, so long-running streaming handlers can stop upstream work.
+export function trackClientDisconnect(req, res) {
+  const controller = new AbortController()
+  req.on("close", () => {
+    if (!res.writableEnded) controller.abort()
+  })
+  return controller
+}

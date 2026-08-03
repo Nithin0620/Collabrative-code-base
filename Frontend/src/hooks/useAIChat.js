@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { buildContextSnapshot } from "../lib/aiContext"
 
 const STORAGE_PREFIX = "ai-chat:"
+const MODEL_STORAGE_PREFIX = "ai-model:"
 
 function uid() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
@@ -21,9 +22,17 @@ function isTaskRequest(text) {
   return TASK_RE.test(t)
 }
 
-function loadHistory(roomId) {
+function storageKey(roomId, userKey) {
+  return STORAGE_PREFIX + (userKey || "anonymous") + ":" + roomId
+}
+
+function modelStorageKey(roomId, userKey) {
+  return MODEL_STORAGE_PREFIX + (userKey || "anonymous") + ":" + roomId
+}
+
+function loadHistory(roomId, userKey) {
   try {
-    const raw = localStorage.getItem(STORAGE_PREFIX + roomId)
+    const raw = localStorage.getItem(storageKey(roomId, userKey))
     if (raw) {
       const parsed = JSON.parse(raw)
       if (Array.isArray(parsed)) return parsed
@@ -32,8 +41,9 @@ function loadHistory(roomId) {
   return []
 }
 
-export default function useAIChat({ roomId, ydoc, fileTree, selectedFileId, openTabs, onApply }) {
-  const [messages, setMessages] = useState(() => loadHistory(roomId))
+export default function useAIChat({ roomId, user, ydoc, fileTree, selectedFileId, openTabs, onApply }) {
+  const userKey = user?._id?.toString() || user?.id?.toString() || user?.username || "anonymous"
+  const [messages, setMessages] = useState(() => loadHistory(roomId, userKey))
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState(null)
   const [model, setModel] = useState({ enabled: true })
@@ -46,7 +56,7 @@ export default function useAIChat({ roomId, ydoc, fileTree, selectedFileId, open
   const [models, setModels] = useState([])
   const [selectedModel, setSelectedModelState] = useState(() => {
     try {
-      return localStorage.getItem("ai-model:" + roomId) || ""
+      return localStorage.getItem(modelStorageKey(roomId, userKey)) || ""
     } catch {
       return ""
     }
@@ -62,13 +72,33 @@ export default function useAIChat({ roomId, ydoc, fileTree, selectedFileId, open
   selectedModelRef.current = selectedModel
 
   useEffect(() => {
+    abortRef.current?.abort()
+    streamingRef.current = false
+    searchingRef.current = false
+    setStreaming(false)
+    setSearching(false)
+    setError(null)
+    setSearchError(null)
+    setSearchResults([])
+    setProposals([])
+    setToolLog([])
+    setAgentCanEdit(false)
+    setMessages(loadHistory(roomId, userKey))
+    try {
+      setSelectedModelState(localStorage.getItem(modelStorageKey(roomId, userKey)) || "")
+    } catch {
+      setSelectedModelState("")
+    }
+  }, [roomId, userKey])
+
+  useEffect(() => {
     try {
       const stored = messages
         .filter((m) => m.role === "user" || (m.role === "assistant" && !m.streaming))
         .map((m) => ({ role: m.role, content: m.content, ts: m.ts }))
-      localStorage.setItem(STORAGE_PREFIX + roomId, JSON.stringify(stored))
+      localStorage.setItem(storageKey(roomId, userKey), JSON.stringify(stored))
     } catch {}
-  }, [messages, roomId])
+  }, [messages, roomId, userKey])
 
   useEffect(() => {
     let cancelled = false
@@ -92,7 +122,7 @@ export default function useAIChat({ roomId, ydoc, fileTree, selectedFileId, open
     return () => {
       cancelled = true
     }
-  }, [roomId])
+  }, [roomId, userKey])
 
   useEffect(() => {
     fetch("/api/ai/config", { credentials: "include" })
@@ -111,10 +141,10 @@ export default function useAIChat({ roomId, ydoc, fileTree, selectedFileId, open
     (m) => {
       setSelectedModelState(m)
       try {
-        localStorage.setItem("ai-model:" + roomId, m)
+        localStorage.setItem(modelStorageKey(roomId, userKey), m)
       } catch {}
     },
-    [roomId]
+    [roomId, userKey]
   )
 
   const send = useCallback(
@@ -216,7 +246,9 @@ export default function useAIChat({ roomId, ydoc, fileTree, selectedFileId, open
             } catch {
               continue
             }
-            if (json.meta) {
+            if (json.error) {
+              throw new Error(json.error)
+            } else if (json.meta) {
               setAgentCanEdit(json.meta.canEdit === true)
             } else if (typeof json.delta === "string" && json.delta.length > 0) {
               assistantContent += json.delta
@@ -346,9 +378,14 @@ export default function useAIChat({ roomId, ydoc, fileTree, selectedFileId, open
           credentials: "include",
           body: JSON.stringify({ proposalId }),
         })
-        await res.json().catch(() => ({}))
-      } catch {}
-      updateProposal(proposalId, { status: "discarded", error: null })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          throw new Error(data.message || "Discard failed (" + res.status + ")")
+        }
+        updateProposal(proposalId, { status: "discarded", error: null })
+      } catch (err) {
+        updateProposal(proposalId, { status: "error", error: err.message || "Something went wrong" })
+      }
     },
     [roomId, updateProposal]
   )
