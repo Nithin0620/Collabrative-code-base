@@ -11,6 +11,7 @@ export default function ShortcutsModal({ onClose }) {
         { label: "Format Code", keys: ["Shift", "Alt", "F"] },
         { label: "Create Version Snapshot", keys: [`${modKey}`, "Shift", "S"] },
         { label: "Open Keyboard Shortcuts", keys: [`${modKey}`, "/"] },
+        { label: "Toggle AI Assistant", keys: [`${modKey}`, "K"] },
       ],
     },
     {

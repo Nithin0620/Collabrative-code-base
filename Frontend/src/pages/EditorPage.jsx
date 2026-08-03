@@ -38,6 +38,8 @@ import SettingsModal from "../components/SettingsModal"
 import OnboardingModal from "../components/OnboardingModal"
 import ToastNotification from "../components/ToastNotification"
 import { downloadFile, downloadProjectAsZip } from "../lib/download"
+import useAIChat from "../hooks/useAIChat"
+import AIChatPanel from "../components/AIChatPanel"
 
 const IDLE_TIMEOUT = 30000
 const TYPING_TIMEOUT = 2000
@@ -172,6 +174,7 @@ export default function EditorPage({ roomId }) {
   const [showChat, setShowChat] = useState(false)
   const [chatSocket, setChatSocket] = useState(null)
   const [sidebarWidth, setSidebarWidth] = useState(224)
+  const [rightPanelWidth, setRightPanelWidth] = useState(320)
   const isResizingRef = useRef(false)
   const [pinnedUser, setPinnedUser] = useState(null)
   const [showGallery, setShowGallery] = useState(false)
@@ -214,6 +217,8 @@ export default function EditorPage({ roomId }) {
     setToasts((prev) => prev.filter((t) => t.id !== id))
   }, [])
 
+  const { role, members, bannedUsers, settings, roomName, setRoomName, renameRoom, canEdit, isOwner, requiresPassword, requiresInvite, fetchProject, fetchMembers, addMember, changeRole, kickUser, banUser, unbanUser, updateSettings } = useProjectRole(roomId)
+
   const handleRoomNameSave = useCallback(async () => {
     const name = editRoomName.trim()
     setEditingRoomName(false)
@@ -247,8 +252,6 @@ export default function EditorPage({ roomId }) {
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [])
-
-  const { role, members, bannedUsers, settings, roomName, setRoomName, renameRoom, canEdit, isOwner, requiresPassword, requiresInvite, fetchProject, fetchMembers, addMember, changeRole, kickUser, banUser, unbanUser, updateSettings } = useProjectRole(roomId)
 
   const {
     localStream,
@@ -364,6 +367,7 @@ export default function EditorPage({ roomId }) {
   const [isSnapshotting, setIsSnapshotting] = useState(false)
   const [statusContent, setStatusContent] = useState("")
   const [showGit, setShowGit] = useState(false)
+  const [showAI, setShowAI] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [showSnapshotDialog, setShowSnapshotDialog] = useState(false)
   const [diffSnapshot, setDiffSnapshot] = useState(null)
@@ -385,6 +389,79 @@ export default function EditorPage({ roomId }) {
   const yFileTree = useMemo(() => ydoc.getMap("fileTree"), [ydoc])
 
   fileTreeRef.current = fileTree
+
+  const insertAtCursor = useCallback((text) => {
+    const editor = editorRef.current
+    const model = editor?.getModel()
+    if (!editor || !model || !monaco) return
+    const selection = editor.getSelection()
+    if (selection && !selection.isEmpty()) {
+      editor.executeEdits("ai-insert", [
+        {
+          range: new monaco.Range(
+            selection.startLineNumber,
+            selection.startColumn,
+            selection.endLineNumber,
+            selection.endColumn
+          ),
+          text,
+        },
+      ])
+    } else {
+      const pos = editor.getPosition()
+      if (pos) {
+        editor.executeEdits("ai-insert", [
+          { range: monaco.Range.fromPositions(pos), text },
+        ])
+      }
+    }
+    editor.focus()
+  }, [monaco])
+
+  const getAIContext = useCallback(() => {
+    const pos = editorRef.current?.getPosition()
+    return {
+      selectionInfo,
+      cursor: pos ? { line: pos.lineNumber, column: pos.column } : null,
+    }
+  }, [selectionInfo])
+
+  const openFileByPath = useCallback(
+    (path, fileId) => {
+      if (fileId) {
+        openTab(fileId)
+        return
+      }
+      if (!path) return
+      const pathMap = {}
+      const build = (id, parts) => {
+        const item = fileTree[id]
+        if (!item) return
+        const rel = [...parts, item.name].join("/")
+        pathMap[rel] = id
+        if (item.type === "folder") {
+          Object.values(fileTree)
+            .filter((c) => c.parentId === id)
+            .forEach((c) => build(c.id, [...parts, item.name]))
+        }
+      }
+      Object.values(fileTree)
+        .filter((c) => !c.parentId)
+        .forEach((c) => build(c.id, []))
+      const resolvedId = pathMap[path]
+      if (resolvedId) openTab(resolvedId)
+    },
+    [fileTree, openTab]
+  )
+
+  const aiChat = useAIChat({
+    roomId,
+    ydoc,
+    fileTree,
+    selectedFileId,
+    openTabs,
+    onApply: openFileByPath,
+  })
 
   const selectedFile = selectedFileId ? fileTree[selectedFileId] : null
   const selectedFileName = selectedFile?.name || null
@@ -913,6 +990,9 @@ export default function EditorPage({ roomId }) {
     if (!user || !providerRef.current || !editorRef.current) return
     if (!selectedFileId) return
 
+    const model = editorRef.current.getModel()
+    if (!model) return
+
     if (bindingRef.current) {
       bindingRef.current.destroy()
       bindingRef.current = null
@@ -921,16 +1001,13 @@ export default function EditorPage({ roomId }) {
     const text = ydoc.getText("file:" + selectedFileId)
     const lang = getFileInfo(fileTreeRef.current[selectedFileId]?.name || "").language
 
-    if (monaco && editorRef.current) {
-      const model = editorRef.current.getModel()
-      if (model) {
-        monaco.editor.setModelLanguage(model, lang)
-      }
+    if (monaco) {
+      monaco.editor.setModelLanguage(model, lang)
     }
 
     bindingRef.current = new MonacoBinding(
       text,
-      editorRef.current.getModel(),
+      model,
       new Set([editorRef.current]),
       providerRef.current.awareness
     )
@@ -951,7 +1028,7 @@ export default function EditorPage({ roomId }) {
         bindingRef.current = null
       }
     }
-  }, [selectedFileId, monaco, ydoc, user])
+  }, [selectedFileId, monaco, ydoc, user, editorInstance])
 
   useEffect(() => {
     if (!user) return
@@ -1234,16 +1311,6 @@ export default function EditorPage({ roomId }) {
   const handleMount = (editor) => {
     editorRef.current = editor
     setEditorInstance(editor)
-
-    if (providerRef.current && !bindingRef.current && selectedFileId) {
-      const text = ydoc.getText("file:" + selectedFileId)
-      bindingRef.current = new MonacoBinding(
-        text,
-        editor.getModel(),
-        new Set([editor]),
-        providerRef.current.awareness
-      )
-    }
   }
 
   useEffect(() => {
@@ -1434,6 +1501,33 @@ export default function EditorPage({ roomId }) {
     document.addEventListener("mouseup", onMouseUp)
   }, [sidebarWidth])
 
+  const handleRightResizeStart = useCallback((e) => {
+    e.preventDefault()
+    isResizingRef.current = true
+    const startX = e.clientX
+    const startWidth = rightPanelWidth
+
+    const onMouseMove = (e) => {
+      if (!isResizingRef.current) return
+      const delta = startX - e.clientX
+      const newWidth = Math.max(260, Math.min(560, startWidth + delta))
+      setRightPanelWidth(newWidth)
+    }
+
+    const onMouseUp = () => {
+      isResizingRef.current = false
+      document.removeEventListener("mousemove", onMouseMove)
+      document.removeEventListener("mouseup", onMouseUp)
+      document.body.style.cursor = ""
+      document.body.style.userSelect = ""
+    }
+
+    document.body.style.cursor = "col-resize"
+    document.body.style.userSelect = "none"
+    document.addEventListener("mousemove", onMouseMove)
+    document.addEventListener("mouseup", onMouseUp)
+  }, [rightPanelWidth])
+
   useEffect(() => {
     setCameraToastDismissed(false)
   }, [Object.keys(remoteStreams).length])
@@ -1460,6 +1554,9 @@ export default function EditorPage({ roomId }) {
       } else if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault()
         setShowRunner(true)
+      } else if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+        e.preventDefault()
+        setShowAI((prev) => !prev)
       }
     }
     window.addEventListener("keydown", handleKeyDown)
@@ -1467,7 +1564,14 @@ export default function EditorPage({ roomId }) {
   }, [handleSave, handleQuickSnapshot])
 
   return (
-    <main className="h-screen w-full bg-gray-950 flex gap-4 p-4 relative overflow-hidden">
+    <main className="h-screen w-full bg-gray-950 flex gap-2 p-2 relative overflow-hidden">
+      <style>{`
+        @keyframes rightPanelIn {
+          from { opacity: 0; transform: translateX(16px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+        .right-panel-in { animation: rightPanelIn 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
+      `}</style>
       <aside
         className="h-full bg-gray-900 rounded-lg flex flex-col border border-gray-700 shrink-0 relative overflow-hidden"
         style={{ width: sidebarWidth, minWidth: 44, maxWidth: 320 }}
@@ -1792,7 +1896,7 @@ export default function EditorPage({ roomId }) {
                   Gallery
                 </button>
                 <button
-                  onClick={() => { setShowChat(!showChat); if (!showChat) { setShowComments(false); setShowGit(false) } }}
+                  onClick={() => { setShowChat(!showChat); if (!showChat) { setShowComments(false); setShowGit(false); setShowAI(false) } }}
                   className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium transition-colors cursor-pointer ${
                     showChat
                       ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
@@ -1822,7 +1926,7 @@ export default function EditorPage({ roomId }) {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
-                Settings
+                GitHub Settings
               </button>
               <button
                 onClick={logout}
@@ -1882,7 +1986,7 @@ export default function EditorPage({ roomId }) {
                 </svg>
               </button>
               <button
-                onClick={() => { setShowChat(!showChat); if (!showChat) { setShowComments(false); setShowGit(false) } }}
+                onClick={() => { setShowChat(!showChat); if (!showChat) { setShowComments(false); setShowGit(false); setShowAI(false) } }}
                 className={`p-1.5 rounded transition-colors cursor-pointer ${
                   showChat
                     ? "bg-amber-500/20 text-amber-400"
@@ -1906,7 +2010,7 @@ export default function EditorPage({ roomId }) {
               <button
                 onClick={() => setShowSettings(true)}
                 className="p-1.5 rounded text-gray-400 hover:bg-gray-800 hover:text-white transition-colors cursor-pointer"
-                title="Settings"
+                title="GitHub Settings"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -1945,7 +2049,7 @@ export default function EditorPage({ roomId }) {
           onSave={handleSave}
           onSnapshot={handleSnapshotClick}
           onShowHistory={() => setShowHistory(true)}
-          onToggleComments={() => { setShowComments(!showComments); if (!showComments) { setShowChat(false); setShowGit(false) } }}
+          onToggleComments={() => { setShowComments(!showComments); if (!showComments) { setShowChat(false); setShowGit(false); setShowAI(false) } }}
           showComments={showComments}
 
           lastSaved={lastSavedTime ? new Date(lastSavedTime).toLocaleTimeString() : null}
@@ -1963,7 +2067,9 @@ export default function EditorPage({ roomId }) {
             setShowTerminal((prev) => !prev)
           }}
           showGit={showGit}
-          onToggleGit={() => { setShowGit(!showGit); if (!showGit) { setShowComments(false); setShowChat(false) } }}
+          onToggleGit={() => { setShowGit(!showGit); if (!showGit) { setShowComments(false); setShowChat(false); setShowAI(false) } }}
+          showAI={showAI}
+          onToggleAI={() => { setShowAI(!showAI); if (!showAI) { setShowComments(false); setShowChat(false); setShowGit(false) } }}
         />
         <TabBar
           tabs={openTabs.map(id => ({
@@ -2062,7 +2168,7 @@ export default function EditorPage({ roomId }) {
       </section>
 
       {showComments && (
-        <div className="absolute top-4 bottom-4 right-4 z-20 w-80 rounded-lg overflow-hidden shadow-2xl border border-gray-700">
+        <div className="w-80 shrink-0 rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in">
           <CommentsPanel
             roomId={roomId}
             user={user}
@@ -2080,7 +2186,7 @@ export default function EditorPage({ roomId }) {
       )}
 
       {showGit && (
-        <div className="absolute top-4 bottom-4 right-4 z-20 w-72 rounded-lg overflow-hidden shadow-2xl border border-gray-700">
+        <div className="w-72 shrink-0 rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in">
           <SourceControlPanel
             roomId={roomId}
             onClose={() => setShowGit(false)}
@@ -2089,8 +2195,8 @@ export default function EditorPage({ roomId }) {
       )}
 
       {showChat && (
-        <div className="absolute top-4 bottom-4 right-4 z-20 w-80 rounded-lg overflow-hidden shadow-2xl border border-gray-700">
-          <div className="h-full w-80 bg-gray-900 rounded-lg border border-gray-700 flex flex-col shrink-0">
+        <div className="w-80 shrink-0 flex flex-col rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in">
+          <div className="flex-1 w-80 bg-gray-900 rounded-lg border border-gray-700 flex flex-col shrink-0">
             <div className="flex items-center justify-between p-3 border-b border-gray-700">
               <h3 className="text-sm font-bold text-white">Chat</h3>
               <button
@@ -2106,6 +2212,49 @@ export default function EditorPage({ roomId }) {
               <ChatPanel roomId={roomId} user={user} socket={chatSocket} />
             </div>
           </div>
+        </div>
+      )}
+
+      {showAI && (
+        <div
+          className="shrink-0 rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in relative"
+          style={{ width: rightPanelWidth }}
+        >
+          {/* Resize handle */}
+          <div
+            onMouseDown={handleRightResizeStart}
+            className="absolute top-0 left-0 h-full w-1 cursor-col-resize group z-10"
+          >
+            <div className="w-px h-full bg-transparent group-hover:bg-gray-500 transition-colors" />
+          </div>
+          <AIChatPanel
+            messages={aiChat.messages}
+            streaming={aiChat.streaming}
+            error={aiChat.error}
+            model={aiChat.model}
+            models={aiChat.models}
+            selectedModel={aiChat.selectedModel}
+            onModelChange={aiChat.setSelectedModel}
+            search={aiChat.search}
+            searching={aiChat.searching}
+            searchError={aiChat.searchError}
+            searchResults={aiChat.searchResults}
+            proposals={aiChat.proposals}
+            toolLog={aiChat.toolLog}
+            agentCanEdit={aiChat.agentCanEdit}
+            onSend={({ question, useRetrieval }) => {
+              const ctx = getAIContext()
+              aiChat.send({ question, selectionInfo: ctx.selectionInfo, cursor: ctx.cursor, useRetrieval })
+            }}
+            sendAgent={aiChat.sendAgent}
+            stop={aiChat.stop}
+            clear={aiChat.clear}
+            applyProposal={aiChat.applyProposal}
+            discardProposal={aiChat.discardProposal}
+            onClose={() => setShowAI(false)}
+            onInsertAtCursor={insertAtCursor}
+            onOpenFile={openFileByPath}
+          />
         </div>
       )}
 

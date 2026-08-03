@@ -372,6 +372,27 @@ export async function getGitStatus(roomId) {
   }
 }
 
+// Compact uncommitted diff summary (staged + unstaged) for prompt context.
+export async function getGitDiffStat(roomId) {
+  const projectDir = getProjectDir(roomId)
+  if (!fs.existsSync(projectDir)) return null
+  const git = simpleGit(projectDir)
+  try {
+    if (!(await git.checkIsRepo())) return null
+    const [unstaged, staged] = await Promise.all([
+      git.diff(['--stat']),
+      git.diff(['--cached', '--stat']),
+    ])
+    const stat = [unstaged, staged].map((s) => s.trim()).filter(Boolean).join('\n')
+    if (!stat) return null
+    const nameOnly = await git.diff(['--name-only'])
+    const files = nameOnly.split('\n').map((s) => s.trim()).filter(Boolean)
+    return { stat, files }
+  } catch {
+    return null
+  }
+}
+
 // Read the on-disk state, persist it back to MongoDB and overwrite the live Yjs
 // document so every connected editor reflects what is on disk (used after git
 // pull/checkout/clone and by the "Sync Disk → Editor" button).

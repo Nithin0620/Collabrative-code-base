@@ -21,6 +21,7 @@ import snippetRoutes from "./routes/snippets.js"
 import testCaseRoutes from "./routes/testCases.js"
 import terminalRoutes from "./routes/terminal.js"
 import gitRoutes from "./routes/git.js"
+import aiRoutes from "./routes/ai.js"
 import { createTerminal, getTerminal, killTerminal } from "./utils/terminalManager.js"
 import User from "./models/User.js"
 import Project from "./models/Project.js"
@@ -51,6 +52,7 @@ const io = new Server(httpServer, {
 
 setIO(io)
 app.set('io', io)
+createWorker(executeCode, io)
 
 io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token || socket.handshake.query?.token
@@ -156,6 +158,7 @@ app.use("/api/snippets", snippetRoutes)
 app.use("/api/testcases", testCaseRoutes)
 app.use("/api/projects", gitRoutes)
 app.use("/api/terminal", terminalRoutes)
+app.use("/api/ai", aiRoutes)
 
 app.post("/api/livekit/token", async (req, res) => {
   try {

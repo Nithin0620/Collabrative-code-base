@@ -4,6 +4,8 @@ import Project from "../models/Project.js"
 import User from "../models/User.js"
 import { authenticateToken, requireProjectRole, getUserProjectRole, requireRoomAccess } from "../middleware/auth.js"
 import { syncProjectToDisk, commitProjectToGit, getHiddenPaths, getRecentGitCommits, getCurrentBranch, filterEditorProject, getGitStatus, applyDiskStateToEditor } from "../utils/projectSync.js"
+import { rebuildRoomIndex } from "../services/symbolIndex.js"
+import { rebuildRoomVectors } from "../services/retrievalService.js"
 
 const router = Router()
 
@@ -100,7 +102,7 @@ router.get("/:roomId", authenticateToken, async (req, res) => {
       await project.save()
     }
 
-    const projectObj = project.toObject()
+    const projectObj = project.toObject({ flattenMaps: true })
     if (projectObj.settings?.password) {
       projectObj.settings.hasPassword = true
       projectObj.settings.password = undefined
@@ -157,6 +159,11 @@ router.post("/:roomId/save", authenticateToken, requireRoomAccess, async (req, r
 
     await syncProjectToDisk(req.params.roomId).catch((err) => {
       console.warn("[projects] Disk sync after save failed:", err.message)
+    })
+
+    const index = rebuildRoomIndex(req.params.roomId, updated.fileTree, updated.files)
+    rebuildRoomVectors(req.params.roomId, index).catch((err) => {
+      console.warn("[retrieval] vector rebuild after save failed:", err.message)
     })
 
     res.json({ success: true, updatedAt: updated.updatedAt })
