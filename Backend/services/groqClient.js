@@ -1,5 +1,4 @@
-const GROQ_BASE_URL = process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1"
-const GROQ_TIMEOUT_MS = parseInt(process.env.GROQ_TIMEOUT_MS || "120000", 10)
+import { GROQ_BASE_URL, GROQ_TIMEOUT_MS } from "../config/ai.js"
 
 // Stream an OpenAI-compatible chat completion from Groq. Calls onToken with
 // each content delta. Throws on upstream errors. Respects `signal` for abort.

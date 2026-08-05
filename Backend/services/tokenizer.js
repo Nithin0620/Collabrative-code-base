@@ -22,15 +22,19 @@ export function truncateMiddleByTokens(text, maxTokens) {
     if (tokens.length <= limit) return s
     const marker = "\n... [truncated] ...\n"
     const markerTokens = encode(marker)
-    const contentBudget = Math.max(1, limit - markerTokens.length)
+    if (markerTokens.length >= limit) return decode(tokens.slice(0, limit))
+    const contentBudget = limit - markerTokens.length
     const headCount = Math.ceil(contentBudget / 2)
     const tailCount = Math.floor(contentBudget / 2)
     return decode(tokens.slice(0, headCount)) + marker + decode(tokens.slice(tokens.length - tailCount))
   } catch {
     const maxChars = limit * 4
     if (s.length <= maxChars) return s
-    const head = Math.floor(maxChars * 0.5)
-    const tail = maxChars - head
-    return s.slice(0, head) + "\n... [truncated] ...\n" + s.slice(-tail)
+    const marker = "\n... [truncated] ...\n"
+    if (maxChars <= marker.length) return s.slice(0, maxChars)
+    const budget = maxChars - marker.length
+    const head = Math.floor(budget * 0.5)
+    const tail = budget - head
+    return s.slice(0, head) + marker + s.slice(-tail)
   }
 }

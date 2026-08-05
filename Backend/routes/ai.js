@@ -1,4 +1,5 @@
 import { Router } from "express"
+import { randomUUID } from "crypto"
 import Project from "../models/Project.js"
 import AIEdit from "../models/AIEdit.js"
 import AIConversation from "../models/AIConversation.js"
@@ -27,10 +28,14 @@ const router = Router()
 
 // Models users can pick from in the AI panel. The env default is always first;
 // the active selection is validated against this list before being sent to Groq.
-// List only model IDs currently served by Groq (retired IDs removed).
+// List only model IDs currently served by Groq (retired IDs removed). Optional
+// comma-separated AI_MODELS env var extends/supersedes the defaults.
 const GROQ_MODELS = Array.from(
   new Set([
     DEFAULT_MODEL,
+    ...(process.env.AI_MODELS
+      ? process.env.AI_MODELS.split(",").map((m) => m.trim()).filter(Boolean)
+      : []),
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
   ])
@@ -55,8 +60,9 @@ async function appendConversation({ roomId, userId, userName, turns }) {
     {
       $push: { messages: { $each: extra, $slice: -MAX_AI_CONVERSATION_MESSAGES } },
       $set: { userName: userName || "" },
+      $setOnInsert: { roomId, userId },
     },
-    { upsert: true, setDefaultsOnInsert: true }
+    { upsert: true }
   )
 }
 
@@ -339,13 +345,13 @@ router.post("/:roomId/apply", authenticateToken, requireRoomAccess, async (req, 
           }
         }
         if (!nodeId) {
-          nodeId = "folder_" + Math.random().toString(36).slice(2, 12)
+          nodeId = "folder_" + randomUUID().replace(/-/g, "").slice(0, 12)
           newNodes[nodeId] = { id: nodeId, name: seg, type: "folder", parentId }
         }
         parentId = nodeId
       }
 
-      const newFileId = "file_" + Math.random().toString(36).slice(2, 12)
+      const newFileId = "file_" + randomUUID().replace(/-/g, "").slice(0, 12)
       newNodes[newFileId] = { id: newFileId, name: fileName, type: "file", parentId }
 
       yDoc.transact(() => {

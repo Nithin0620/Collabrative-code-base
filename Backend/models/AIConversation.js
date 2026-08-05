@@ -16,7 +16,7 @@ const aiConversationSchema = new mongoose.Schema(
   {
     roomId: { type: String, required: true, index: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    userName: { type: String, default: "", index: true },
+    userName: { type: String, default: "" },
     messages: { type: [messageSchema], default: [] },
   },
   { timestamps: true }

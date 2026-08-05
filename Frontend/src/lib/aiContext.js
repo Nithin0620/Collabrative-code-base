@@ -70,17 +70,21 @@ function truncateFileContent(content, cursorLine, maxChars) {
     j--
   }
 
+  const marker = "\n... [truncated] ...\n"
   const cursorIdx = Math.max(0, (cursorLine || 1) - 1)
   const from = Math.max(i, cursorIdx - 40)
   const to = Math.min(j + 1, cursorIdx + 41)
   const middleRaw = lines.slice(from, to).join("\n")
-  const middleBudget = Math.max(0, maxChars - head.length - tail.length - 16)
+  const middleBudget = Math.max(
+    0,
+    maxChars - head.length - tail.length - (head ? marker.length : 0) - (j < lines.length - 1 ? marker.length : 0)
+  )
   const middle = middleRaw.length <= middleBudget ? middleRaw : middleRaw.slice(0, middleBudget)
 
   return (
-    (head ? head + "\n... [truncated] ...\n" : "") +
+    (head ? head + marker : "") +
     middle +
-    (j < lines.length - 1 ? "\n... [truncated] ...\n" + tail : "")
+    (j < lines.length - 1 ? marker + tail : "")
   )
 }
 

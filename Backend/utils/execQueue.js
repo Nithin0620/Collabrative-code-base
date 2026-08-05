@@ -39,13 +39,18 @@ function createWorker(executeCode, io) {
       const { executionId, userId, roomId, language, code, stdin } = job.data
       const room = `exec:${executionId}`
 
-      await Execution.findOneAndUpdate(
-        { executionId },
-        { status: "running" },
-      )
-      io.to(room).emit("exec:started", { executionId })
-
       try {
+        const claim = await Execution.findOneAndUpdate(
+          { executionId, status: "queued" },
+          { status: "running" },
+          { new: true },
+        )
+        if (!claim) {
+          io.to(room).emit("exec:stopped", { executionId })
+          return { executionId, status: "stopped" }
+        }
+        io.to(room).emit("exec:started", { executionId })
+
         const result = await executeCode(language, code, stdin, executionId, (chunk) => {
           io.to(room).emit("exec:chunk", {
             executionId,
@@ -54,8 +59,8 @@ function createWorker(executeCode, io) {
           })
         })
 
-        await Execution.findOneAndUpdate(
-          { executionId },
+        const finished = await Execution.findOneAndUpdate(
+          { executionId, status: "running" },
           {
             stdout: result.stdout,
             stderr: result.stderr,
@@ -67,6 +72,10 @@ function createWorker(executeCode, io) {
             sandboxed: dockerAvailable,
           },
         )
+        if (!finished) {
+          io.to(room).emit("exec:stopped", { executionId })
+          return { executionId, status: "stopped" }
+        }
 
         io.to(room).emit("exec:done", {
           executionId,
@@ -81,19 +90,20 @@ function createWorker(executeCode, io) {
 
         return { executionId, status: "completed" }
       } catch (err) {
-        await Execution.findOneAndUpdate(
-          { executionId },
+        const markFailed = await Execution.findOneAndUpdate(
+          { executionId, status: { $in: ["queued", "running"] } },
           {
             stderr: err.message,
             exitCode: 1,
             status: "failed",
           },
-        )
-
-        io.to(room).emit("exec:error", {
-          executionId,
-          message: err.message,
-        })
+        ).catch(() => null)
+        if (markFailed) {
+          io.to(room).emit("exec:error", {
+            executionId,
+            message: err.message,
+          })
+        }
 
         throw err
       }
@@ -147,10 +157,6 @@ async function stopJob(executionId, sandboxStopFn) {
   } else {
     if (sandboxStopFn) await sandboxStopFn(executionId)
   }
-  await Execution.findOneAndUpdate(
-    { executionId },
-    { status: "stopped", stderr: "Execution stopped by user.", exitCode: 137 },
-  )
 }
 
 async function closeQueue() {

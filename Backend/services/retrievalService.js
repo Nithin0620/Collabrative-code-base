@@ -61,10 +61,11 @@ function chunkContent(content, symbols) {
       const prev = chunks[chunks.length - 1]
       if (prev && prev.endLine - prev.startLine < MAX_CHUNK_LINES) {
         const merged = makeChunk(lines, prev.startLine, end)
-        if (!merged) continue
-        prev.text = merged.text
-        prev.endLine = merged.endLine
-        continue
+        if (merged && merged.endLine === end) {
+          prev.text = merged.text
+          prev.endLine = merged.endLine
+          continue
+        }
       }
     }
 

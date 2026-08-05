@@ -375,21 +375,21 @@ export async function getGitStatus(roomId) {
 
 // Compact uncommitted diff summary (staged + unstaged) for prompt context.
 // Protected paths (e.g. .env, credentials) are filtered out so secrets never
-// reach the model via the git diff tool.
+// reach the model via the git diff tool. The stat is computed by git over the
+// approved pathspecs (instead of text-filtering a full-diff stat), so the file
+// rows and their totals are accurate even when protected and public files change
+// together or files are renamed.
 export async function getGitDiffStat(roomId) {
   const projectDir = getProjectDir(roomId)
   if (!fs.existsSync(projectDir)) return null
   const git = simpleGit(projectDir)
   try {
     if (!(await git.checkIsRepo())) return null
-    const [unstaged, staged, unstagedNames, stagedNames, status] = await Promise.all([
-      git.diff(['--stat']),
-      git.diff(['--cached', '--stat']),
+    const [unstagedNames, stagedNames, status] = await Promise.all([
       git.diff(['--name-only']),
       git.diff(['--cached', '--name-only']),
       git.status(),
     ])
-    const stat = [unstaged, staged].map((s) => s.trim()).filter(Boolean).join('\n')
     const files = [...new Set(
       [
         ...unstagedNames.split('\n'),
@@ -401,20 +401,16 @@ export async function getGitDiffStat(roomId) {
         .filter((p) => !isSecretPath(p))
     )]
     if (!files.length) return null
-    if (!stat && !status.files.some((f) => f.working_dir === '?' && files.includes(f.path))) return null
-    const kept = new Set(files)
-    const filteredTrackedStat = stat
-      .split('\n')
-      .filter((line) => {
-        const filePart = line.split('|')[0]?.trim()
-        if (!filePart || !line.includes('|')) return true
-        return kept.has(filePart)
-      })
-      .join('\n')
+    const [unstaged, staged] = await Promise.all([
+      git.diff(['--stat', '--', ...files]),
+      git.diff(['--cached', '--stat', '--', ...files]),
+    ])
+    const stat = [unstaged, staged].map((s) => s.trim()).filter(Boolean).join('\n')
     const untracked = status.files
-      .filter((f) => f.working_dir === '?' && kept.has(f.path))
+      .filter((f) => f.working_dir === '?' && files.includes(f.path))
       .map((f) => ` ?? ${f.path}`)
-    const filteredStat = [filteredTrackedStat, ...untracked].filter(Boolean).join('\n')
+    const filteredStat = [stat, ...untracked].filter(Boolean).join('\n')
+    if (!filteredStat.trim()) return null
     return { stat: filteredStat, files }
   } catch {
     return null

@@ -65,10 +65,10 @@ export const AGENT_TOOLS = [
     type: "function",
     function: {
       name: "grep_symbol",
-      description: "Search all project files for a regex or literal pattern and return matching lines.",
+      description: "Search all project files for a literal substring (case-insensitive) and return matching lines. For safety, regex patterns are not supported.",
       parameters: {
         type: "object",
-        properties: { pattern: { type: "string", description: "Pattern to search for." } },
+        properties: { pattern: { type: "string", description: "Literal substring to search for." } },
         required: ["pattern"],
         additionalProperties: false,
       },
@@ -128,7 +128,7 @@ const AGENT_SYSTEM_PROMPT = `You are an autonomous coding agent embedded in a co
 Available tools:
 - list_files: list project files.
 - read_file: read a file (or a line range).
-- grep_symbol: find occurrences of a pattern across files.
+- grep_symbol: find files and lines containing a literal substring (case-insensitive). Regex is not supported.
 - get_git_diff: view uncommitted git changes.
 - create_file: propose a brand-new file (and any missing folders). The file is NOT created until the user approves it in the UI.
 - apply_edit: propose replacing one exact occurrence of oldString with newString. The edit is NOT applied until the user approves it in the UI.
@@ -149,7 +149,7 @@ function safeParse(json) {
   try {
     return JSON.parse(json)
   } catch (e) {
-    console.error("[agent] tool arguments failed to parse:", e.message, "payload:", String(json).slice(0, 200))
+    console.error("[agent] tool arguments failed to parse:", e.message)
     return null
   }
 }
@@ -392,10 +392,16 @@ async function executeTool(name, args, ctx) {
       return { matches, count: matches.length, truncated }
     }
     case "get_git_diff": {
-      const git = await getGitStatus(roomId).catch(() => null)
+      const git = await getGitStatus(roomId).catch((err) => {
+        console.warn("[agent] get_git_diff: git status failed:", err?.message || err)
+        return null
+      })
       if (!git || !git.isRepo) return { status: "Not a git repository" }
       if (git.uncommitted === 0) return { status: `Clean working tree on ${git.branch}` }
-      const diff = await getGitDiffStat(roomId).catch(() => null)
+      const diff = await getGitDiffStat(roomId).catch((err) => {
+        console.warn("[agent] get_git_diff: git diff stat failed:", err?.message || err)
+        return null
+      })
       return { branch: git.branch, uncommitted: git.uncommitted, staged: git.staged, workingTree: git.workingTree, diffStat: diff?.stat || "" }
     }
     case "create_file": {
@@ -553,7 +559,8 @@ export async function runAgent({
       let toolOutput = JSON.stringify(output)
       if (toolOutput.length > MAX_TOOL_OUTPUT_CHARS) {
         console.warn(`[agent] tool "${name}" output truncated (${toolOutput.length} chars, max ${MAX_TOOL_OUTPUT_CHARS})`)
-        toolOutput = toolOutput.slice(0, MAX_TOOL_OUTPUT_CHARS - 40) + "\n...[output truncated; ask for a narrower result]"
+        const truncationNotice = "\n...[output truncated; ask for a narrower result]"
+        toolOutput = toolOutput.slice(0, MAX_TOOL_OUTPUT_CHARS - truncationNotice.length) + truncationNotice
       }
       messages.push({ role: "tool", tool_call_id: tc.id, content: toolOutput })
     }

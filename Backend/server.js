@@ -270,7 +270,7 @@ io.on("connection", (socket) => {
   })
 
   socket.on("join-execution", async (executionId) => {
-    if (!socket.user) {
+    if (!socket.user || !socket.user._id) {
       socket.emit("exec:error", { executionId, message: "Authentication required" })
       return
     }
@@ -280,9 +280,17 @@ io.on("connection", (socket) => {
         socket.emit("exec:error", { executionId, message: "Execution not found" })
         return
       }
-      const userId = socket.user._id?.toString()
-      const ownsExecution = execution.userId?.toString() === userId
-      const sameRoom = execution.roomId && execution.roomId === socket.data.roomId && socket.data.userRole !== "viewer"
+      const userId = String(socket.user._id)
+      const ownsExecution = execution.userId ? String(execution.userId) === userId : false
+      // Resolve room membership from the DB (not socket.data.roomId), so this
+      // works even when join-execution is called on a socket that never ran
+      // join-room (e.g. the code runner panel).
+      let sameRoom = false
+      if (execution.roomId) {
+        const project = await Project.findOne({ roomId: execution.roomId }).select("createdBy members settings")
+        const role = getUserProjectRole(project, userId)
+        sameRoom = !!role && role !== "viewer"
+      }
       if (!ownsExecution && !sameRoom) {
         socket.emit("exec:error", { executionId, message: "Not authorized for this execution" })
         return

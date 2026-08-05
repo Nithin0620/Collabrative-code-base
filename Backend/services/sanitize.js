@@ -3,9 +3,10 @@ export const SECRET_PATH_RE =
   /(^|\/)(node_modules|\.git)(\/|$)|(^|\/)\.env([.\w]*)$|(^|\/)\.[\w-]*(secret|credential|credentials)[\w.-]*$|(^|\/)(\.aws|\.ssh|\.config)(\/|$)|(^|\/)(id_rsa|id_ed25519|\.npmrc|\.pgpass|\.netrc|\.git-credentials)$/i
 
 // Redact obvious secret assignments inside otherwise-safe file content.
-// Matches both quoted ("...", '...') and unquoted values (KEY=value, key: value).
+// Matches quoted ("...", '...') and unquoted values (KEY=value, key: value),
+// plus JSON-style keys ("apiKey": "...", 'apiKey': '...').
 export const SECRET_LINE_RE =
-  /\b(password|passwd|secret|client_?secret|api[_-]?key|apikey|access[_-]?key|refresh[_-]?token|auth[_-]?token|bearer|private[_-]?key|database[_-]?url)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,#;]+)/gi
+  /["']?\b(password|passwd|secret|client_?secret|api[_-]?key|apikey|access[_-]?key|refresh[_-]?token|auth[_-]?token|bearer|private[_-]?key|database[_-]?url)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,#;]+)/gi
 
 export function redactSecrets(content) {
   return String(content || "").replace(SECRET_LINE_RE, (match) =>

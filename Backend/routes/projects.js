@@ -194,7 +194,7 @@ router.post("/:roomId/snapshot", authenticateToken, requireRoomAccess, async (re
       gitCommit = await commitProjectToGit(
         req.params.roomId,
         `${label ? label + ": " : ""}${message || "Snapshot"}`,
-        { name: req.user.username || author || "user", email: req.user.email || "user@localhost" }
+        { name: req.user.username || "user", email: req.user.email || "user@localhost" }
       )
     } catch (err) {
       console.warn("[snapshot] git backup failed:", err.message)

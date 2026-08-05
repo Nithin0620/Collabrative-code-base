@@ -10,7 +10,8 @@ export default function LoginPage() {
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const searchParams = useMemo(() => new URLSearchParams(window.location.search), [])
+  const search = window.location.search
+  const searchParams = useMemo(() => new URLSearchParams(search), [search])
   const isInvite = searchParams.get("redirect")?.includes("inviteToken")
 
   useEffect(() => {
