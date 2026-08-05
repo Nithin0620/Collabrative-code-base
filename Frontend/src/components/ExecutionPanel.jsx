@@ -26,6 +26,7 @@ export default function ExecutionPanel({
   onOpenTestCases,
   testCases,
   onTestCasesConsumed,
+  token,
 }) {
   const [stdin, setStdin] = useState("")
   const [output, setOutput] = useState(null)
@@ -51,7 +52,7 @@ export default function ExecutionPanel({
       handleRunAllTests(testCases)
       if (onTestCasesConsumed) onTestCasesConsumed()
     }
-  }, [testCases])
+  }, [testCases, code, handleRunAllTests, onTestCasesConsumed])
 
   useEffect(() => {
     if (outputRef.current) {
@@ -73,11 +74,11 @@ export default function ExecutionPanel({
 
     const sock = io("/", {
       transports: ["websocket"],
-      auth: {},
+      auth: { token: token || "" },
     })
     socketRef.current = sock
     return sock
-  }, [])
+  }, [token])
 
   const handleRun = useCallback(async (stdinOverride) => {
     if (!code?.trim()) return

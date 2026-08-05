@@ -57,6 +57,20 @@ router.post("/", authenticateToken, async (req, res) => {
 router.post("/:executionId/stop", authenticateToken, async (req, res) => {
   try {
     const { executionId } = req.params
+    const execution = await Execution.findOne({ executionId }).select("userId status").lean()
+    if (!execution) {
+      return res.status(404).json({ message: "Execution not found" })
+    }
+    if (execution.userId?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "You can only stop your own executions" })
+    }
+    const claimed = await Execution.findOneAndUpdate(
+      { executionId, status: { $in: ["queued", "running"] } },
+      { status: "stopped", stderr: "Execution stopped by user.", exitCode: 137 },
+    ).lean()
+    if (!claimed) {
+      return res.status(409).json({ message: "Execution is not running" })
+    }
     await stopJob(executionId, stopExecution)
     res.json({ stopped: true })
   } catch (error) {

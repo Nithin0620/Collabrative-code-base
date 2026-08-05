@@ -4,6 +4,8 @@ import Project from "../models/Project.js"
 import User from "../models/User.js"
 import { authenticateToken, requireProjectRole, getUserProjectRole, requireRoomAccess } from "../middleware/auth.js"
 import { syncProjectToDisk, commitProjectToGit, getHiddenPaths, getRecentGitCommits, getCurrentBranch, filterEditorProject, getGitStatus, applyDiskStateToEditor } from "../utils/projectSync.js"
+import { rebuildRoomIndex } from "../services/symbolIndex.js"
+import { rebuildRoomVectors } from "../services/retrievalService.js"
 
 const router = Router()
 
@@ -100,7 +102,8 @@ router.get("/:roomId", authenticateToken, async (req, res) => {
       await project.save()
     }
 
-    const projectObj = project.toObject()
+    // Flatten Mongoose Maps to plain objects for easier consumption by the client.
+    const projectObj = project.toObject({ flattenMaps: true })
     if (projectObj.settings?.password) {
       projectObj.settings.hasPassword = true
       projectObj.settings.password = undefined
@@ -159,6 +162,11 @@ router.post("/:roomId/save", authenticateToken, requireRoomAccess, async (req, r
       console.warn("[projects] Disk sync after save failed:", err.message)
     })
 
+    const index = rebuildRoomIndex(req.params.roomId, updated.fileTree, updated.files)
+    rebuildRoomVectors(req.params.roomId, index).catch((err) => {
+      console.warn("[retrieval] vector rebuild after save failed:", err.message)
+    })
+
     res.json({ success: true, updatedAt: updated.updatedAt })
   } catch (error) {
     res.status(500).json({ message: "Failed to save project" })
@@ -167,7 +175,7 @@ router.post("/:roomId/save", authenticateToken, requireRoomAccess, async (req, r
 
 router.post("/:roomId/snapshot", authenticateToken, requireRoomAccess, async (req, res) => {
   try {
-    const { data, label, message, author, authorAvatar, filesCount, fileNames } = req.body
+    const { data, label, message, filesCount, fileNames } = req.body
 
     const project = await Project.findOne({ roomId: req.params.roomId })
     if (!project) {
@@ -186,15 +194,15 @@ router.post("/:roomId/snapshot", authenticateToken, requireRoomAccess, async (re
       gitCommit = await commitProjectToGit(
         req.params.roomId,
         `${label ? label + ": " : ""}${message || "Snapshot"}`,
-        { name: req.user.username || author || "user", email: req.user.email || "user@localhost" }
+        { name: req.user.username || "user", email: req.user.email || "user@localhost" }
       )
     } catch (err) {
       console.warn("[snapshot] git backup failed:", err.message)
     }
 
-    project.history.push({
-      data, label: label || "", message: message || "",
-      author: author || "", authorAvatar: authorAvatar || "",
+      project.history.push({
+        data, label: label || "", message: message || "",
+      author: req.user.username || "", authorAvatar: req.user.avatar || "",
       filesCount: filesCount || 0, fileNames: fileNames || [],
       gitCommit: gitCommit || null,
     })

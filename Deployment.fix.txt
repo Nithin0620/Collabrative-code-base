@@ -1,0 +1,13 @@
+Wrote the full plan to aws-deployment-plan.md. Here's the verdict:
+Deployment readiness: ~80% — shippable after 4 blockers + a few fixes
+Already good: multi-stage Dockerfile builds frontend and serves it from Express, /health endpoint, env-driven config, secure cookies toggle via NODE_ENV, all 4 AI phases wired, and a CI + GHCR publish pipeline already exist.
+4 blockers (🔴):
+1. No SPA fallback — BrowserRouter deep links (refresh on /editor/:roomId) 404; only express.static("public") exists (server.js:406).
+2. Docker socket required — sandbox + terminal use dockerode; without it code exec silently falls back to unsandboxed child processes. → forces ECS-EC2, not Fargate.
+3. In-memory single-instance state — Yjs live docs, room members, terminals, AI proposals, symbol/vector indexes are all per-process. Multi-instance = split-brain collab.
+4. BullMQ needs Redis at boot — worker created at startup; ElastiCache is mandatory.
+Worth noting: secrets are baked into the Docker image via ARG/ENV (removable), NODE_ENV never set, /tmp/opencode-projects is ephemeral, LiveKit is dev-configured (no TURN/UDP), stale Backend/public build artifacts are committed, and Work.txt has a session token.
+The plan (Part A–O) covers everything you asked
+- Services used: ECS-EC2, EC2 (Jenkins), ECR ×3, VPC+ALB+NLB, Route 53 + ACM, EFS, ElastiCache Redis, Mongo Atlas, Secrets Manager, Terraform (S3+DynamoDB state), CloudWatch/SNS, optional WAF/CloudFront/GuardDuty/S3.
+- Architecture diagram showing single API task + NLB for LiveKit UDP, Jenkinsfile pipeline, Terraform module tree + task-def/ECR snippets, secrets matrix, security checklist, rollback runbook, scaling roadmap, ~$310/mo cost estimate, and a Part N code-fix list + Part O go-live checklist.
+Want me to apply the Part N code fixes (SPA fallback, Dockerfile secret removal, trust proxy, configurable sandbox image names) and scaffold the deploy/terraform + Jenkinsfile files?

@@ -21,9 +21,11 @@ import snippetRoutes from "./routes/snippets.js"
 import testCaseRoutes from "./routes/testCases.js"
 import terminalRoutes from "./routes/terminal.js"
 import gitRoutes from "./routes/git.js"
+import aiRoutes from "./routes/ai.js"
 import { createTerminal, getTerminal, killTerminal } from "./utils/terminalManager.js"
 import User from "./models/User.js"
 import Project from "./models/Project.js"
+import Execution from "./models/Execution.js"
 import { getUserProjectRole } from "./middleware/auth.js"
 
 await connectDB()
@@ -51,6 +53,7 @@ const io = new Server(httpServer, {
 
 setIO(io)
 app.set('io', io)
+createWorker(executeCode, io)
 
 io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token || socket.handshake.query?.token
@@ -156,6 +159,7 @@ app.use("/api/snippets", snippetRoutes)
 app.use("/api/testcases", testCaseRoutes)
 app.use("/api/projects", gitRoutes)
 app.use("/api/terminal", terminalRoutes)
+app.use("/api/ai", aiRoutes)
 
 app.post("/api/livekit/token", async (req, res) => {
   try {
@@ -265,8 +269,36 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("peer-joined", { peerId: socket.id, userRole: socket.data.userRole })
   })
 
-  socket.on("join-execution", (executionId) => {
-    socket.join("exec:" + executionId)
+  socket.on("join-execution", async (executionId) => {
+    if (!socket.user || !socket.user._id) {
+      socket.emit("exec:error", { executionId, message: "Authentication required" })
+      return
+    }
+    try {
+      const execution = await Execution.findOne({ executionId: String(executionId || "") }).select("userId roomId").lean()
+      if (!execution) {
+        socket.emit("exec:error", { executionId, message: "Execution not found" })
+        return
+      }
+      const userId = String(socket.user._id)
+      const ownsExecution = execution.userId ? String(execution.userId) === userId : false
+      // Resolve room membership from the DB (not socket.data.roomId), so this
+      // works even when join-execution is called on a socket that never ran
+      // join-room (e.g. the code runner panel).
+      let sameRoom = false
+      if (execution.roomId) {
+        const project = await Project.findOne({ roomId: execution.roomId }).select("createdBy members settings")
+        const role = getUserProjectRole(project, userId)
+        sameRoom = !!role && role !== "viewer"
+      }
+      if (!ownsExecution && !sameRoom) {
+        socket.emit("exec:error", { executionId, message: "Not authorized for this execution" })
+        return
+      }
+      socket.join("exec:" + String(executionId || ""))
+    } catch {
+      socket.emit("exec:error", { executionId, message: "Failed to join execution stream" })
+    }
   })
 
   socket.on("get-room-members", (roomId, cb) => {
