@@ -26,7 +26,7 @@
     "express": "^5.2.1",
     "gpt-tokenizer": "^3.4.0",
     "ignore": "^7.0.6",
-    "ioredis": "^5.11.1",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "livekit-server-sdk": "^2.11.2",
     "mongoose": "^9.8.0",
