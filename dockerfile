@@ -1,43 +1,27 @@
-# Build the Frontend [dist folder]
-# Copy the dist folder content in Backend/public folder
-
-FROM node:20-alpine as frontend-builder
-
-COPY ./Frontend /app
-
+# Stage 1: Build the Frontend
+FROM node:20-alpine AS frontend-builder
 WORKDIR /app
-
-RUN npm install
-
+COPY ./Frontend/package*.json ./
+RUN npm ci || npm install
+COPY ./Frontend ./
 RUN npm run build
 
-# Build the Backend
+# Stage 2: Build and run the Backend
 FROM node:20-alpine
-
-COPY ./Backend /app
-
 WORKDIR /app
 
-RUN npm install
+ENV NODE_ENV=production
+ENV PORT=3000
 
-COPY --from=frontend-builder /app/dist /app/public
+COPY ./Backend/package*.json ./
+RUN npm ci --omit=dev || npm install --omit=dev
 
-ARG MONGODB_URI
-ARG JWT_SECRET
-ARG GOOGLE_CLIENT_ID
-ARG GOOGLE_CLIENT_SECRET
-ARG GITHUB_CLIENT_ID
-ARG GITHUB_CLIENT_SECRET
-ARG CLIENT_URL
-ARG PORT=3000
+COPY ./Backend ./
+COPY --from=frontend-builder /app/dist ./public
 
-ENV MONGODB_URI=$MONGODB_URI
-ENV JWT_SECRET=$JWT_SECRET
-ENV GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
-ENV GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET
-ENV GITHUB_CLIENT_ID=$GITHUB_CLIENT_ID
-ENV GITHUB_CLIENT_SECRET=$GITHUB_CLIENT_SECRET
-ENV CLIENT_URL=$CLIENT_URL
-ENV PORT=$PORT
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
 
 CMD ["node", "server.js"]

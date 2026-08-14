@@ -40,117 +40,13 @@ import ToastNotification from "../components/ToastNotification"
 import { downloadFile, downloadProjectAsZip } from "../lib/download"
 import useAIChat from "../hooks/useAIChat"
 import AIChatPanel from "../components/AIChatPanel"
+import MarkdownPreview from "../components/MarkdownPreview"
+import { UserAvatar, StatusDot, RelativeTime, formatRelativeTime } from "../components/CollaboratorItem"
+import { injectCursorStyles } from "../hooks/useAwarenessCursors"
 
 const IDLE_TIMEOUT = 30000
 const TYPING_TIMEOUT = 2000
 const AUTO_SAVE_INTERVAL = 10000
-
-function UserAvatar({ user }) {
-  const speakingClass = user?.isSpeaking ? "ring-2 ring-green-400 ring-offset-2 ring-offset-gray-900 animate-pulse" : ""
-  if (user.avatar) {
-    return (
-      <img
-        src={user.avatar}
-        alt={user.username}
-        className={`w-8 h-8 rounded-full object-cover ${speakingClass}`}
-      />
-    )
-  }
-  return (
-    <div
-      className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0 ${speakingClass}`}
-      style={{ backgroundColor: user.color }}
-    >
-      {user.username.charAt(0).toUpperCase()}
-    </div>
-  )
-}
-
-function StatusDot({ status }) {
-  const color = status === "offline" ? "bg-gray-500" : status === "idle" ? "bg-yellow-400" : "bg-green-400"
-  const title = status === "offline" ? "Offline" : status === "idle" ? "Idle" : "Active"
-  return (
-    <span
-      className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${color}`}
-      title={title}
-    />
-  )
-}
-
-function RelativeTime({ timestamp }) {
-  const [text, setText] = useState(() => formatRelativeTime(timestamp))
-
-  useEffect(() => {
-    setText(formatRelativeTime(timestamp))
-    const interval = setInterval(() => setText(formatRelativeTime(timestamp)), 10000)
-    return () => clearInterval(interval)
-  }, [timestamp])
-
-  return <span title={new Date(timestamp).toLocaleString()}>{text}</span>
-}
-
-function formatRelativeTime(ts) {
-  if (!ts) return ""
-  const seconds = Math.floor((Date.now() - ts) / 1000)
-  if (seconds < 5) return "just now"
-  if (seconds < 60) return seconds + "s ago"
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return minutes + "m ago"
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return hours + "h ago"
-  return Math.floor(hours / 24) + "d ago"
-}
-
-function injectCursorStyles(awareness, localClientID) {
-  let styleEl = document.getElementById("y-monaco-cursors")
-  if (!styleEl) {
-    styleEl = document.createElement("style")
-    styleEl.id = "y-monaco-cursors"
-    document.head.appendChild(styleEl)
-  }
-
-  const states = awareness.getStates()
-  let css = ""
-
-  states.forEach((state, clientID) => {
-    if (clientID === localClientID) return
-    const u = state.user
-    if (!u || !u.color) return
-
-    const color = u.color
-    const name = (u.name || "Anonymous").replace(/"/g, '\\"')
-    css += `
-      .yRemoteSelection-${clientID} {
-        background-color: ${color}33;
-      }
-      .yRemoteSelectionHead-${clientID} {
-        position: relative;
-        border-left: 2px solid ${color};
-        margin-left: -1px;
-        box-sizing: border-box;
-      }
-      .yRemoteSelectionHead-${clientID}::after {
-        content: "${name}";
-        position: absolute;
-        top: -1.6em;
-        left: -1px;
-        font-size: 11px;
-        font-family: system-ui, sans-serif;
-        font-weight: 600;
-        line-height: normal;
-        padding: 1px 5px;
-        border-radius: 4px 4px 4px 0;
-        white-space: nowrap;
-        color: white;
-        background-color: ${color};
-        pointer-events: none;
-        z-index: 10;
-      }
-    `
-  })
-
-  styleEl.textContent = css
-}
 
 export default function EditorPage({ roomId }) {
   const { user, token, logout } = useAuth()
@@ -258,10 +154,12 @@ export default function EditorPage({ roomId }) {
     remoteStreams,
     audioEnabled,
     videoEnabled,
+    screenShareEnabled,
     isSpeaking,
     handRaised,
     toggleAudio,
     toggleVideo,
+    toggleScreenShare,
     toggleHand,
   } = useLiveKit(chatSocket, roomId, user)
 
@@ -271,6 +169,7 @@ export default function EditorPage({ roomId }) {
   const [openTabs, setOpenTabs] = useState([])
   const [showTerminal, setShowTerminal] = useState(false)
   const [terminalPanelMounted, setTerminalPanelMounted] = useState(false)
+  const [showMarkdown, setShowMarkdown] = useState(false)
 
   const previewFileIdRef = useRef(null)
 
@@ -464,6 +363,19 @@ export default function EditorPage({ roomId }) {
     openTabs,
     onApply: openFileByPath,
   })
+
+  const handleFixWithAI = useCallback(
+    ({ error, code, language }) => {
+      setShowRunner(false)
+      setShowAI(true)
+      setShowComments(false)
+      setShowChat(false)
+      setShowGit(false)
+      const prompt = `I ran my ${language || "code"} and encountered the following execution error:\n\`\`\`\n${error}\n\`\`\`\nPlease analyze this error, explain what caused it, and provide a fix.`
+      aiChat.send({ question: prompt, forceAgent: false })
+    },
+    [aiChat]
+  )
 
   const selectedFile = selectedFileId ? fileTree[selectedFileId] : null
   const selectedFileName = selectedFile?.name || null
@@ -1876,6 +1788,20 @@ export default function EditorPage({ roomId }) {
                   {videoEnabled ? "Stop" : "Cam"}
                 </button>
                 <button
+                  onClick={toggleScreenShare}
+                  className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium transition-colors cursor-pointer ${
+                    screenShareEnabled
+                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/30"
+                      : "bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-600"
+                  }`}
+                  title={screenShareEnabled ? "Stop sharing screen" : "Share screen"}
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                  {screenShareEnabled ? "Stop" : "Screen"}
+                </button>
+                <button
                   onClick={toggleHand}
                   className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-[10px] font-medium transition-colors cursor-pointer ${
                     handRaised
@@ -2074,6 +2000,8 @@ export default function EditorPage({ roomId }) {
           onToggleGit={() => { setShowGit(!showGit); if (!showGit) { setShowComments(false); setShowChat(false); setShowAI(false) } }}
           showAI={showAI}
           onToggleAI={() => { setShowAI(!showAI); if (!showAI) { setShowComments(false); setShowChat(false); setShowGit(false) } }}
+          showMarkdown={showMarkdown}
+          onToggleMarkdown={() => setShowMarkdown((v) => !v)}
         />
         <TabBar
           tabs={openTabs.map(id => ({
@@ -2093,30 +2021,43 @@ export default function EditorPage({ roomId }) {
         <div className="flex-1 overflow-hidden relative flex flex-col">
           <div className="flex-1 overflow-hidden relative">
             {selectedFileId ? (
-              <>
-                <Editor
-                  height="100%"
-                  language={selectedFileLanguage}
-                  theme={theme}
-                  onMount={handleMount}
-                  options={{
-                    fontSize,
-                    minimap: { enabled: true, scale: 1 },
-                    scrollBeyondLastLine: false,
-                    wordWrap: "on",
-                    automaticLayout: true,
-                    tabSize: 2,
-                    glyphMargin: true,
-                    readOnly: !canEdit,
-                  }}
-                />
-                <MouseOverlay positions={remoteMousePositions} />
-                <MinimapOverlay
-                  editorRef={editorRef}
-                  users={users}
-                  localUsername={user?.username}
-                  monaco={monaco}
-                />
+              <div className="flex h-full w-full">
+                <div className={`h-full relative ${showMarkdown ? "w-1/2 border-r border-gray-700" : "w-full"}`}>
+                  <Editor
+                    height="100%"
+                    language={selectedFileLanguage}
+                    theme={theme}
+                    onMount={handleMount}
+                    options={{
+                      fontSize,
+                      minimap: { enabled: !showMarkdown, scale: 1 },
+                      scrollBeyondLastLine: false,
+                      wordWrap: "on",
+                      automaticLayout: true,
+                      tabSize: 2,
+                      glyphMargin: true,
+                      readOnly: !canEdit,
+                    }}
+                  />
+                  <MouseOverlay positions={remoteMousePositions} />
+                  {!showMarkdown && (
+                    <MinimapOverlay
+                      editorRef={editorRef}
+                      users={users}
+                      localUsername={user?.username}
+                      monaco={monaco}
+                    />
+                  )}
+                </div>
+                {showMarkdown && (
+                  <div className="w-1/2 h-full">
+                    <MarkdownPreview
+                      content={getFileContent(selectedFileId)}
+                      filename={selectedFileName}
+                      onClose={() => setShowMarkdown(false)}
+                    />
+                  </div>
+                )}
                 {selectionInfo && (
                   <button
                     onMouseDown={(e) => e.preventDefault()}
@@ -2139,7 +2080,7 @@ export default function EditorPage({ roomId }) {
                     Comment
                   </button>
                 )}
-              </>
+              </div>
             ) : (
               <div className="h-full flex items-center justify-center text-gray-500">
                 <div className="text-center">
@@ -2378,6 +2319,7 @@ export default function EditorPage({ roomId }) {
           }}
           testCases={pendingTestCases}
           onTestCasesConsumed={() => setPendingTestCases(null)}
+          onFixWithAI={handleFixWithAI}
         />
       )}
 

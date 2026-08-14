@@ -2,7 +2,11 @@ import "dotenv/config"
 import express from "express"
 import cors from "cors"
 import cookieParser from "cookie-parser"
+import path from "path"
+import { fileURLToPath } from "url"
 import { createServer } from "http"
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 import { Server } from "socket.io"
 import { YSocketIO } from "y-socket.io/dist/server"
 import jwt from "jsonwebtoken"
@@ -32,6 +36,7 @@ await connectDB()
 configurePassport()
 
 const app = express()
+app.set("trust proxy", true)
 
 app.use(cors({
   origin: process.env.CLIENT_URL,
@@ -432,7 +437,16 @@ app.get("/health", (req, res) => {
   res.status(200).json({ message: "ok", success: true })
 })
 
-app.use(express.static("public"))
+const publicDir = path.join(__dirname, "public")
+app.use(express.static(publicDir))
+
+app.get(/^\/(?!api\/|auth\/|socket\.io|health).*/, (req, res) => {
+  res.sendFile(path.join(publicDir, "index.html"), (err) => {
+    if (err) {
+      res.status(200).send("CollabEditor API is running.")
+    }
+  })
+})
 
 httpServer.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {

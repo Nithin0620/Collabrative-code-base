@@ -27,6 +27,7 @@ export default function ExecutionPanel({
   testCases,
   onTestCasesConsumed,
   token,
+  onFixWithAI,
 }) {
   const [stdin, setStdin] = useState("")
   const [output, setOutput] = useState(null)
@@ -394,7 +395,21 @@ export default function ExecutionPanel({
               {output && !running && !testResults && (
                 <>
                   {output.stderr ? (
-                    <span className="text-red-400">{output.stderr}</span>
+                    <div>
+                      <span className="text-red-400">{output.stderr}</span>
+                      {onFixWithAI && (
+                        <div className="mt-3 pt-2 border-t border-gray-700/50 flex items-center justify-between">
+                          <span className="text-[11px] text-gray-400">Execution failed</span>
+                          <button
+                            onClick={() => onFixWithAI({ error: output.stderr, code, language: selectedLang })}
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 text-xs font-semibold transition-all cursor-pointer shadow-sm hover:scale-[1.02]"
+                          >
+                            <span>🤖</span>
+                            <span>Auto-Fix with AI</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   ) : output.stdout ? (
                     <span className="text-green-300">{output.stdout}</span>
                   ) : (

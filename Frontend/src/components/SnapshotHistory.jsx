@@ -59,6 +59,59 @@ export default function SnapshotHistory({
   const [gitCommits, setGitCommits] = useState([])
   const [gitInfo, setGitInfo] = useState(null)
   const [gitStatus, setGitStatus] = useState(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncMessage, setSyncMessage] = useState("")
+
+  const refreshHistoryAndGit = useCallback(async () => {
+    try {
+      const res = await fetch("/api/projects/" + roomId + "/history", {
+        credentials: "include",
+      })
+      const data = await res.json()
+      setHistory((data.history || []).slice().reverse())
+      setGitCommits(data.gitCommits || [])
+      setGitInfo(data.gitInfo || null)
+      setGitStatus(data.gitStatus || null)
+    } catch (err) {
+      console.error("Failed to load history", err)
+    }
+  }, [roomId])
+
+  const handleSyncToDisk = async () => {
+    setSyncing(true)
+    setSyncMessage("")
+    try {
+      const res = await fetch(`/api/projects/${roomId}/sync/to-disk`, {
+        method: "POST",
+        credentials: "include",
+      }).then((r) => r.json())
+      setSyncMessage(res.message || "Synced to disk")
+      setTimeout(() => setSyncMessage(""), 3000)
+      await refreshHistoryAndGit()
+    } catch {
+      setSyncMessage("Sync to disk failed")
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const handleSyncToEditor = async () => {
+    setSyncing(true)
+    setSyncMessage("")
+    try {
+      const res = await fetch(`/api/projects/${roomId}/sync/to-editor`, {
+        method: "POST",
+        credentials: "include",
+      }).then((r) => r.json())
+      setSyncMessage(res.message || "Synced to editor")
+      setTimeout(() => setSyncMessage(""), 3000)
+      await refreshHistoryAndGit()
+    } catch {
+      setSyncMessage("Sync to editor failed")
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -353,17 +406,45 @@ export default function SnapshotHistory({
           </div>
         </div>
 
-        {gitStatus?.isRepo && gitStatus.uncommitted > 0 && (
-          <div className="mx-4 mt-3 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
-            <svg className="w-4 h-4 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-            </svg>
-            <p className="text-[11px] text-amber-200/90">
-              {gitStatus.uncommitted} uncommitted change{gitStatus.uncommitted !== 1 ? "s" : ""} on{" "}
-              <span className="font-mono">{gitStatus.branch || "current branch"}</span>
-              {gitStatus.staged > 0 && ` · ${gitStatus.staged} staged`}
-              {gitStatus.workingTree > 0 && ` · ${gitStatus.workingTree} in working tree`}
-            </p>
+        {gitStatus?.isRepo && (
+          <div className="mx-4 mt-3 p-2.5 rounded-lg bg-gray-800/80 border border-gray-700 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+              </svg>
+              <p className="text-[11px] text-gray-300">
+                <span className="font-mono text-amber-300">{gitStatus.branch || "current branch"}</span>:{" "}
+                {gitStatus.uncommitted > 0 ? (
+                  <span className="text-amber-200">
+                    {gitStatus.uncommitted} uncommitted change{gitStatus.uncommitted !== 1 ? "s" : ""}
+                    {gitStatus.staged > 0 && ` (${gitStatus.staged} staged)`}
+                  </span>
+                ) : (
+                  <span className="text-green-400">Working tree clean</span>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {syncMessage && (
+                <span className="text-[10px] text-green-400 font-medium mr-1">{syncMessage}</span>
+              )}
+              <button
+                onClick={handleSyncToDisk}
+                disabled={syncing}
+                className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-[10px] font-medium border border-gray-600 transition-colors disabled:opacity-50 cursor-pointer"
+                title="Write editor buffer into local git repository on disk"
+              >
+                Sync to Disk
+              </button>
+              <button
+                onClick={handleSyncToEditor}
+                disabled={syncing}
+                className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-[10px] font-medium border border-gray-600 transition-colors disabled:opacity-50 cursor-pointer"
+                title="Read disk files into live collaborative editor document"
+              >
+                Sync to Editor
+              </button>
+            </div>
           </div>
         )}
 

@@ -10,6 +10,7 @@ const RANK = {
   save: 0,
   snapshot: 0,
   run: 0,
+  markdown: 0,
   theme: 1,
   size: 1,
   history: 1,
@@ -65,6 +66,8 @@ export default function EditorToolbar({
   showGit,
   showAI,
   onToggleAI,
+  showMarkdown,
+  onToggleMarkdown,
 }) {
   const lang = filename ? getFileInfo(filename) : null
 
@@ -271,6 +274,31 @@ export default function EditorToolbar({
       rank: DIVIDER_RANK,
       render: () => <div className="w-px h-4 bg-gray-700 shrink-0" />,
     })
+
+    if (filename && (filename.endsWith('.md') || filename.endsWith('.markdown') || filename.toLowerCase() === 'readme')) {
+      list.push({
+        key: "markdown",
+        rank: RANK.markdown,
+        render: (inMenu) => (
+          <button
+            onClick={onToggleMarkdown}
+            title="Toggle Markdown Preview"
+            className={
+              inMenu
+                ? `${MENU_ROW} ${showMarkdown ? "text-amber-400 font-semibold" : "text-gray-300 hover:text-white"}`
+                : `px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 ${
+                    showMarkdown
+                      ? "bg-amber-500/20 text-amber-300 border border-amber-500/30 shadow-sm"
+                      : "bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-white"
+                  }`
+            }
+          >
+            <span>👁️</span>
+            <span>{showMarkdown ? "Hide Preview" : "Preview"}</span>
+          </button>
+        ),
+      })
+    }
 
     if (!readOnly) {
       list.push({
