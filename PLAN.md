@@ -34,13 +34,13 @@
 - [x] `git clone` endpoint that creates a new room from a GitHub URL
 - [x] Commit history view (git log rendered in UI)
 
-## Phase 4 — Git + Snapshot Coexistence & Polish
+## Phase 4 — Git + Snapshot Coexistence & Polish ✓
 **Goal:** Both versioning systems work together seamlessly
 
-- [ ] Editor state ↔ filesystem sync strategy (two-way)
-- [ ] Git-aware snapshot creation (snapshot also creates a git commit)
-- [ ] Auto-detect git changes and show in SnapshotHistory
-- [ ] "Sync to Editor" / "Sync to Disk" buttons
-- [ ] node_modules exclusion from Yjs/editor
-- [ ] .gitignore awareness in file tree
-- [ ] Polish: credential management, error handling, onboarding flow
+- [x] Editor state ↔ filesystem sync strategy (two-way)
+- [x] Git-aware snapshot creation (snapshot also creates a git commit)
+- [x] Auto-detect git changes and show in SnapshotHistory
+- [x] "Sync to Editor" / "Sync to Disk" buttons
+- [x] node_modules exclusion from Yjs/editor
+- [x] .gitignore awareness in file tree
+- [x] Polish: credential management, error handling, onboarding flow

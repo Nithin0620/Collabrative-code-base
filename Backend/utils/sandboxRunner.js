@@ -98,7 +98,7 @@ async function executeInDocker(language, code, stdin, executionId, onChunk) {
   }
 
   const containerConfig = {
-    Image: "sandbox-runner:latest",
+    Image: process.env.SANDBOX_IMAGE || "sandbox-runner:latest",
     Cmd: [language, "/code/" + fileName, stdin ? "/code/stdin.txt" : ""],
     WorkingDir: "/home/sandbox",
     HostConfig: {

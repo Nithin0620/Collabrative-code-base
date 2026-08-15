@@ -11,7 +11,7 @@ import User from '../models/User.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const docker = new Docker()
 const terminals = new Map()
-const TERMINAL_IMAGE = 'opencode-terminal:latest'
+const TERMINAL_IMAGE = process.env.TERMINAL_IMAGE || 'opencode-terminal:latest'
 const DOCKERFILE_PATH = path.resolve(__dirname, '../sandbox/terminal.Dockerfile')
 const CONTAINER_LABEL = 'opencode-terminal'
 

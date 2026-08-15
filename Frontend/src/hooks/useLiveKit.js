@@ -264,6 +264,46 @@ export default function useLiveKit(socket, roomId, user) {
     }
   }, [updateLocalStream])
 
+  const [screenShareEnabled, setScreenShareEnabled] = useState(false)
+  const screenShareEnabledRef = useRef(false)
+  screenShareEnabledRef.current = screenShareEnabled
+
+  const toggleScreenShare = useCallback(async () => {
+    try {
+      if (roomRef.current && roomRef.current.state === ConnectionState.Connected) {
+        const room = roomRef.current
+        const nextState = !screenShareEnabledRef.current
+        await room.localParticipant.setScreenShareEnabled(nextState)
+        setScreenShareEnabled(nextState)
+        screenShareEnabledRef.current = nextState
+        updateLocalStream()
+      } else {
+        if (screenShareEnabledRef.current) {
+          setScreenShareEnabled(false)
+          screenShareEnabledRef.current = false
+        } else {
+          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true })
+          const screenTrack = stream.getVideoTracks()[0]
+          screenTrack.onended = () => {
+            setScreenShareEnabled(false)
+            screenShareEnabledRef.current = false
+            updateLocalStream()
+          }
+          if (localStreamRef.current) {
+            localStreamRef.current.addTrack(screenTrack)
+          } else {
+            localStreamRef.current = new MediaStream([screenTrack])
+          }
+          setLocalStream(localStreamRef.current)
+          setScreenShareEnabled(true)
+          screenShareEnabledRef.current = true
+        }
+      }
+    } catch (err) {
+      console.error("LiveKit toggleScreenShare error:", err)
+    }
+  }, [updateLocalStream])
+
   const toggleHand = useCallback(() => {
     setHandRaised((prev) => !prev)
   }, [])
@@ -296,10 +336,12 @@ export default function useLiveKit(socket, roomId, user) {
     remoteStreams,
     audioEnabled,
     videoEnabled,
+    screenShareEnabled,
     handRaised,
     setHandRaised,
     toggleAudio,
     toggleVideo,
+    toggleScreenShare,
     toggleHand,
     callPeer,
     cleanupPeer,
