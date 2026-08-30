@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+
 
 export function injectCursorStyles(awareness, localClientID) {
   if (!awareness) return

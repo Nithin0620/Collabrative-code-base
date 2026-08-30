@@ -25,7 +25,7 @@ export default function MarkdownPreview({ content, filename, onClose }) {
       .replace(/^# (.*$)/gim, '<h1 class="text-xl font-extrabold text-amber-400 mt-6 mb-3 border-b border-amber-500/30 pb-2">$1</h1>')
 
       // Blockquotes
-      .replace(/^\> (.*$)/gim, '<blockquote class="border-l-4 border-amber-500 bg-amber-500/10 px-3 py-1.5 my-2 text-gray-300 italic rounded-r">$1</blockquote>')
+      .replace(/^> (.*$)/gim, '<blockquote class="border-l-4 border-amber-500 bg-amber-500/10 px-3 py-1.5 my-2 text-gray-300 italic rounded-r">$1</blockquote>')
 
       // Bold & Italic
       .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-bold text-white">$1</strong>')
@@ -36,7 +36,7 @@ export default function MarkdownPreview({ content, filename, onClose }) {
       .replace(/- \[ \] (.*$)/gim, '<li class="flex items-center gap-2 my-1 text-gray-400"><input type="checkbox" disabled class="rounded" /> <span>$1</span></li>')
 
       // Unordered Lists
-      .replace(/^\- (.*$)/gim, '<li class="ml-4 list-disc text-gray-300 my-0.5">$1</li>')
+      .replace(/^- (.*$)/gim, '<li class="ml-4 list-disc text-gray-300 my-0.5">$1</li>')
       .replace(/^\* (.*$)/gim, '<li class="ml-4 list-disc text-gray-300 my-0.5">$1</li>')
 
       // Horizontal Rule

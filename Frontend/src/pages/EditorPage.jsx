@@ -41,7 +41,7 @@ import { downloadFile, downloadProjectAsZip } from "../lib/download"
 import useAIChat from "../hooks/useAIChat"
 import AIChatPanel from "../components/AIChatPanel"
 import MarkdownPreview from "../components/MarkdownPreview"
-import { UserAvatar, StatusDot, RelativeTime, formatRelativeTime } from "../components/CollaboratorItem"
+import { UserAvatar, StatusDot, RelativeTime } from "../components/CollaboratorItem"
 import { injectCursorStyles } from "../hooks/useAwarenessCursors"
 
 const IDLE_TIMEOUT = 30000
@@ -365,7 +365,7 @@ export default function EditorPage({ roomId }) {
   })
 
   const handleFixWithAI = useCallback(
-    ({ error, code, language }) => {
+    ({ error, language }) => {
       setShowRunner(false)
       setShowAI(true)
       setShowComments(false)
