@@ -1,4 +1,5 @@
 
+
 export function injectCursorStyles(awareness, localClientID) {
   if (!awareness) return
   let styleEl = document.getElementById("y-monaco-cursors")
