@@ -1480,7 +1480,7 @@ export default function EditorPage({ roomId }) {
   }, [handleSave, handleQuickSnapshot])
 
   return (
-    <main className="h-screen w-full bg-gray-950 flex gap-2 p-2 relative overflow-hidden">
+    <main className="h-screen w-full bg-gray-950 flex flex-col md:flex-row gap-2 p-2 relative overflow-hidden overflow-y-auto md:overflow-hidden">
       <style>{`
         @keyframes rightPanelIn {
           from { opacity: 0; transform: translateX(16px); }
@@ -1489,8 +1489,8 @@ export default function EditorPage({ roomId }) {
         .right-panel-in { animation: rightPanelIn 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
       `}</style>
       <aside
-        className="h-full bg-gray-900 rounded-lg flex flex-col border border-gray-700 shrink-0 relative overflow-hidden"
-        style={{ width: sidebarWidth, minWidth: 44, maxWidth: 320 }}
+        className="h-auto md:h-full bg-gray-900 rounded-lg flex-col border border-gray-700 shrink-0 relative overflow-hidden flex w-full md:w-auto"
+        style={{ width: "100%", md: { width: sidebarWidth }, minWidth: 44, maxWidth: "100%" }}
       >
         {/* Dashboard */}
         {sidebarCollapsed ? (
@@ -1969,7 +1969,7 @@ export default function EditorPage({ roomId }) {
         </div>
       </aside>
 
-      <section className="flex-1 min-w-0 bg-gray-900 rounded-lg overflow-hidden border border-gray-700 flex flex-col">
+      <section className="flex-1 min-w-0 bg-gray-900 rounded-lg overflow-hidden border border-gray-700 flex flex-col min-h-[50vh] w-full">
         <EditorToolbar
           filename={selectedFileName}
           theme={theme}
@@ -2021,16 +2021,18 @@ export default function EditorPage({ roomId }) {
         <div className="flex-1 overflow-hidden relative flex flex-col">
           <div className="flex-1 overflow-hidden relative">
             {selectedFileId ? (
-              <div className="flex h-full w-full">
-                <div className={`h-full relative ${showMarkdown ? "w-1/2 border-r border-gray-700" : "w-full"}`}>
+              <div className="flex flex-col md:flex-row h-full w-full">
+                <div className={`relative ${showMarkdown ? "h-1/2 md:h-full w-full md:w-1/2 border-b md:border-b-0 md:border-r border-gray-700" : "h-full w-full"}`}>
                   <Editor
                     height="100%"
                     language={selectedFileLanguage}
                     theme={theme}
                     onMount={handleMount}
                     options={{
-                      fontSize,
-                      minimap: { enabled: !showMarkdown, scale: 1 },
+                      fontSize: window.innerWidth < 768 ? Math.max(12, fontSize - 2) : fontSize,
+                      minimap: { enabled: !showMarkdown && window.innerWidth >= 768, scale: 1 },
+                      lineNumbersMinChars: window.innerWidth < 768 ? 2 : 4,
+                      padding: { top: 8, bottom: 8 },
                       scrollBeyondLastLine: false,
                       wordWrap: "on",
                       automaticLayout: true,
@@ -2050,7 +2052,7 @@ export default function EditorPage({ roomId }) {
                   )}
                 </div>
                 {showMarkdown && (
-                  <div className="w-1/2 h-full">
+                  <div className="w-full md:w-1/2 h-1/2 md:h-full">
                     <MarkdownPreview
                       content={getFileContent(selectedFileId)}
                       filename={selectedFileName}
@@ -2113,7 +2115,7 @@ export default function EditorPage({ roomId }) {
       </section>
 
       {showComments && (
-        <div className="w-80 shrink-0 rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in">
+        <div className="w-full md:w-80 shrink-0 rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in">
           <CommentsPanel
             roomId={roomId}
             user={user}
@@ -2131,7 +2133,7 @@ export default function EditorPage({ roomId }) {
       )}
 
       {showGit && (
-        <div className="w-72 shrink-0 rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in">
+        <div className="w-full md:w-72 shrink-0 rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in">
           <SourceControlPanel
             roomId={roomId}
             onClose={() => setShowGit(false)}
@@ -2140,8 +2142,8 @@ export default function EditorPage({ roomId }) {
       )}
 
       {showChat && (
-        <div className="w-80 shrink-0 flex flex-col rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in">
-          <div className="flex-1 w-80 bg-gray-900 rounded-lg border border-gray-700 flex flex-col shrink-0">
+        <div className="w-full md:w-80 shrink-0 flex flex-col rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in">
+          <div className="flex-1 w-full md:w-80 bg-gray-900 rounded-lg border border-gray-700 flex flex-col shrink-0">
             <div className="flex items-center justify-between p-3 border-b border-gray-700">
               <h3 className="text-sm font-bold text-white">Chat</h3>
               <button
@@ -2162,7 +2164,7 @@ export default function EditorPage({ roomId }) {
 
       {showAI && (
         <div
-          className="shrink-0 rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in relative"
+          className="w-full md:w-auto shrink-0 rounded-lg overflow-hidden shadow-2xl border border-gray-700 right-panel-in relative"
           style={{ width: rightPanelWidth }}
         >
           {/* Resize handle */}
