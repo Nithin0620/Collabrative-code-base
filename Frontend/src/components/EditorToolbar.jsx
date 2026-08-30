@@ -569,6 +569,9 @@ export default function EditorToolbar({
     showComments,
     onToggleComments,
     downloadOpen,
+    filename,
+    onToggleMarkdown,
+    showMarkdown,
   ])
 
   const { visibleItems, overflowItems, hasOverflow } = useMemo(() => {

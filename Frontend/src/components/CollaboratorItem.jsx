@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react"
-import { formatRelativeTime } from "../utils/formatTime"
+import { formatRelativeTime } from "../utils/formatTime.js"
 
 export function UserAvatar({ user }) {
   const speakingClass = user?.isSpeaking ? "ring-2 ring-green-400 ring-offset-2 ring-offset-gray-900 animate-pulse" : ""

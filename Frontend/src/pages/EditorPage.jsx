@@ -1164,7 +1164,7 @@ export default function EditorPage({ roomId }) {
       const styleEl = document.getElementById("y-monaco-cursors")
       if (styleEl) styleEl.remove()
     }
-  }, [user, token, ydoc, yFileTree, roomId, loadProjectData, fetchProject, fetchMembers, navigate, setRoomName])
+  }, [user, token, ydoc, yFileTree, roomId, loadProjectData, fetchProject, fetchMembers, navigate, setRoomName, role])
 
   const [roomAccessError, setRoomAccessError] = useState("")
 
